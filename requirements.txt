@@ -1,0 +1,20 @@
+# Dépendances principales
+numpy
+matplotlib
+pandas
+requests
+
+# Pour la manipulation de dates
+python-dateutil
+
+# Pour l'interface en ligne de commande
+argparse
+
+# Optionnel: pour l'analyse avancée avec LLM
+openai
+
+# Optionnel: pour manipuler les projections cartographiques
+cartopy
+
+# Optionnel: pour une visualisation améliorée
+seaborn
