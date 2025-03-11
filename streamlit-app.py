@@ -9,25 +9,22 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-import os
-import sys
+import re  # Nécessaire pour le nouveau script d'analyse
 import logging
-import json
 from datetime import datetime
-from io import StringIO
-import re
 
 # Importer les classes et fonctions du fichier principal
 from emagramme_analyzer import (
-    AtmosphericLevel,
-    EmagrammeAnalysis,
     EmagrammeAnalyzer,
     EmagrammeDataFetcher,
-    EmagrammeAgent,
-    ADIABATIC_DRY_LAPSE_RATE,
-    ADIABATIC_MOIST_LAPSE_RATE,
-    DEW_POINT_LAPSE_RATE,
     THERMAL_TRIGGER_DELTA
+)
+
+# Importer l'analyse améliorée IA pour les parapentistes
+# Ajouter cette nouvelle importation
+from enhanced_emagramme_analysis import (
+    EnhancedEmagrammeAgent,
+    analyze_emagramme_for_pilot
 )
 
 # Configuration du logging
@@ -177,11 +174,19 @@ def fetch_and_analyze(lat, lon, model, site_altitude, api_key, openai_key=None, 
             if openai_key:
                 try:
                     with st.spinner("Génération de l'analyse par l'IA..."):
-                        agent = EmagrammeAgent(openai_api_key=openai_key)
+                        # Utiliser la nouvelle classe EnhancedEmagrammeAgent au lieu de EmagrammeAgent
+                        agent = EnhancedEmagrammeAgent(openai_api_key=openai_key)
                         detailed_analysis = agent.analyze_conditions(analysis)
                 except Exception as e:
                     st.error(f"Erreur lors de l'analyse IA: {str(e)}")
                     logger.error(f"Erreur lors de l'analyse IA: {e}")
+                    # En cas d'erreur avec OpenAI, utiliser notre analyse interne améliorée
+                    with st.spinner("Utilisation de l'analyse IA améliorée interne..."):
+                        detailed_analysis = analyze_emagramme_for_pilot(analysis)
+            else:
+                # Si pas de clé OpenAI, utiliser automatiquement notre analyse interne améliorée
+                with st.spinner("Génération de l'analyse détaillée..."):
+                    detailed_analysis = analyze_emagramme_for_pilot(analysis)
             
             return analyzer, analysis, detailed_analysis
             
@@ -424,13 +429,15 @@ def main():
                                   help="Requis pour récupérer les données météo")
     
     # Option pour clé OpenAI (analyse IA)
-    use_ai = st.sidebar.checkbox("Utiliser l'analyse IA", value=False,
-                               help="Génère une analyse détaillée avec OpenAI")
+    use_ai = st.sidebar.checkbox("Utiliser l'analyse IA externe (OpenAI)", value=False,
+                               help="Utilise OpenAI pour générer une analyse détaillée en complément de l'analyse intégrée")
     
     if use_ai:
         openai_key = st.sidebar.text_input("Clé API OpenAI", type="password")
     else:
         openai_key = None
+        # Message indiquant que l'analyse intégrée sera utilisée
+        st.sidebar.info("L'analyse détaillée intégrée sera utilisée")
     
     # Paramètres avancés
     with st.sidebar.expander("Paramètres avancés"):
@@ -512,8 +519,20 @@ def main():
                 tab1, tab2, tab3, tab4 = st.tabs(["Émagramme", "Résultats", "Données brutes", "Aide"])
                 
                 with tab1:
-                    # Afficher l'émagramme
-                    display_emagramme(analyzer, analysis, detailed_analysis)
+                    # Créer deux colonnes pour l'émagramme et l'analyse détaillée
+                    col1, col2 = st.columns([3, 2])
+                    
+                    with col1:
+                        # Afficher l'émagramme sans l'analyse textuelle
+                        fig = analyzer.plot_emagramme(analysis, show=False)
+                        st.pyplot(fig)
+                    
+                    with col2:
+                        # Afficher l'analyse détaillée améliorée avec mise en forme Markdown
+                        if detailed_analysis:
+                            st.markdown(detailed_analysis)
+                        else:
+                            st.info("Aucune analyse détaillée disponible")
                 
                 with tab2:
                     # Dans votre onglet d'analyse de résultats
