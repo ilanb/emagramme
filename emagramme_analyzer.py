@@ -91,7 +91,6 @@ class EmagrammeAnalysis:
     spread_levels: Dict[str, float] = None  # Spread à différentes altitudes
     spread_analysis: str = None  # Analyse textuelle du spread
 
-
 def add_convective_layer_visualization(ax, analysis):
         """
         Ajoute une visualisation claire de la couche convective à l'émagramme
@@ -2796,6 +2795,7 @@ def main():
             lat, lon = map(float, args.location.split(','))
             logger.info(f"Récupération des données pour la position {lat}, {lon} avec le modèle {args.model}")
             levels = fetcher.fetch_from_windy(lat, lon, model=args.model)
+            
             # Récupérer les informations sur les nuages et précipitations depuis le fetcher
             cloud_info = None
             precip_info = None
@@ -2803,6 +2803,7 @@ def main():
                 cloud_info = fetcher.cloud_info
             if hasattr(fetcher, 'precip_info'):
                 precip_info = fetcher.precip_info
+
         except Exception as e:
             logger.error(f"Erreur lors de la récupération des données: {e}")
             sys.exit(1)

@@ -159,10 +159,15 @@ def fetch_and_analyze(lat, lon, model, site_altitude, api_key, openai_key=None, 
             cloud_info = getattr(fetcher, 'cloud_info', None)
             precip_info = getattr(fetcher, 'precip_info', None)
             
-            # Initialiser l'analyseur - MODIFIER CETTE LIGNE pour inclure model_name
+            # Initialiser l'analyseur avec toutes les informations
             analyzer = EmagrammeAnalyzer(levels, site_altitude=site_altitude, 
                                          cloud_info=cloud_info, precip_info=precip_info,
-                                         model_name=model)  # Ajout du model_name ici
+                                         model_name=model)
+            
+            # IMPORTANT : Copier les informations directement dans l'objet analyzer
+            # pour qu'elles soient facilement accessibles par l'interface
+            analyzer.cloud_info = cloud_info
+            analyzer.precip_info = precip_info
             
             # Effectuer l'analyse
             analysis = analyzer.analyze()
@@ -771,7 +776,7 @@ def main():
                                 st.write(f"- {gear}")
                 
                 with tab3:
-                    # Afficher les données brutes
+                    # Afficher les niveaux atmosphériques
                     st.subheader("Niveaux atmosphériques")
                     data = {
                         "Altitude (m)": [level.altitude for level in analyzer.levels],
@@ -787,6 +792,44 @@ def main():
                     
                     df = pd.DataFrame(data)
                     st.dataframe(df)
+                    
+                    # Afficher DIRECTEMENT les informations de couverture nuageuse depuis l'analyse
+                    st.subheader("Couverture nuageuse")
+                    if (analysis.low_cloud_cover is not None or 
+                        analysis.mid_cloud_cover is not None or 
+                        analysis.high_cloud_cover is not None):
+                        
+                        cloud_data = {
+                            "Type": ["Nuages bas", "Nuages moyens", "Nuages hauts"],
+                            "Couverture (%)": [
+                                analysis.low_cloud_cover if analysis.low_cloud_cover is not None else "Non disponible",
+                                analysis.mid_cloud_cover if analysis.mid_cloud_cover is not None else "Non disponible",
+                                analysis.high_cloud_cover if analysis.high_cloud_cover is not None else "Non disponible"
+                            ]
+                        }
+                        st.dataframe(pd.DataFrame(cloud_data))
+                    else:
+                        st.info("Aucune information sur la couverture nuageuse disponible")
+                    
+                    # Afficher DIRECTEMENT les informations sur les précipitations depuis l'analyse
+                    st.subheader("Précipitations")
+                    if analysis.precipitation_type is not None:
+                        st.info(f"Type: {analysis.precipitation_type} - {analysis.precipitation_description}")
+                    else:
+                        st.info("Aucune précipitation")
+                    
+                    # Afficher les calculs de spread
+                    st.subheader("Calculs de spread (T° - Td)")
+                    st.write(f"Spread au sol: {analysis.ground_spread:.1f}°C")
+                    
+                    if analysis.spread_levels:
+                        spread_data = []
+                        for level_name, spread_value in analysis.spread_levels.items():
+                            spread_data.append({
+                                "Niveau": level_name.capitalize(),
+                                "Spread (°C)": f"{spread_value:.1f}"
+                            })
+                        st.dataframe(pd.DataFrame(spread_data))
                     
                     # Option pour télécharger les données
                     csv = df.to_csv(index=False)
