@@ -928,7 +928,7 @@ def main():
                 
                 # Onglets pour le reste des informations
                 if fetch_evolution_enabled and evolution_data:
-                    tab1, tab2, tab3, tab4 = st.tabs(["Résultats", "Évolution", "Données brutes", "Aide"])
+                    tab1, tab2, tab3 = st.tabs(["Résultats", "Évolution et Données brutes", "Aide"])
                 else:
                     tab1, tab2, tab3 = st.tabs(["Résultats", "Données brutes", "Aide"])
                 
