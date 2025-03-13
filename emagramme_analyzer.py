@@ -1079,11 +1079,11 @@ class EmagrammeAnalyzer:
         include_llm_panel = llm_analysis is not None
 
         # Créer une figure avec deux sous-graphiques - un pour l'émagramme et un pour le texte
-        fig = plt.figure(figsize=(12, 16))  # Augmenter la hauteur pour accommoder le texte en bas
+        fig = plt.figure(figsize=(12, 10))  # Augmenter la hauteur pour accommoder le texte en bas
         gs = plt.GridSpec(2, 1, height_ratios=[3, 1], figure=fig)
         
         # Graphique d'émagramme (3/4 supérieur)
-        ax = fig.add_subplot(gs[0])
+        ax = fig.add_subplot(111)
         
         # Panneau de texte (1/4 inférieur)
         ax_text = fig.add_subplot(gs[1])

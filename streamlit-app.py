@@ -125,58 +125,62 @@ def create_convective_layer_plot(analysis, inversions=None):
     thermal_ceiling = analysis.thermal_ceiling
     anabatic_zone_top = min(ground_alt + 500, thermal_ceiling)
     
-    # Créer le graphique
-    fig, ax = plt.subplots(figsize=(4, 6))
+    # Réduire la taille de la figure
+    fig, ax = plt.subplots(figsize=(3, 4))  # Taille réduite
     
-    # Zone convective complète (en vert clair avec plus de transparence)
+    # Zone convective complète
     ax.axhspan(ground_alt, thermal_ceiling, alpha=0.1, color='green', 
             label="Couche convective")
     
-    # Zone anabatique (premiers 500m au-dessus du sol)
+    # Zone anabatique
     ax.axhspan(ground_alt, anabatic_zone_top, alpha=0.1, color='blue', 
             label="Zone anabatique")
     
-    # Ajout de lignes horizontales pour marquer les altitudes clés
-    ax.axhline(y=ground_alt, color='brown', linestyle='-', linewidth=1.5)
-    ax.axhline(y=thermal_ceiling, color='purple', linestyle='--', linewidth=1.5)
-    ax.axhline(y=anabatic_zone_top, color='blue', linestyle='--', linewidth=1)
+    # Lignes horizontales
+    ax.axhline(y=ground_alt, color='brown', linestyle='-', linewidth=1)  # Réduire l'épaisseur des lignes
+    ax.axhline(y=thermal_ceiling, color='purple', linestyle='--', linewidth=1)
+    ax.axhline(y=anabatic_zone_top, color='blue', linestyle='--', linewidth=0.8)
     
-    # Ajout d'annotations pour les altitudes
+    # Réduire la taille du texte des annotations
     ax.text(0.05, ground_alt + 50, f"Sol: {ground_alt:.0f}m", 
-            fontsize=8, ha='left', va='bottom')
+            fontsize=6, ha='left', va='bottom')  # Réduire la taille du texte
     ax.text(0.05, thermal_ceiling - 50, f"Plafond: {thermal_ceiling:.0f}m", 
-            fontsize=8, ha='left', va='top')
-    ax.text(0.05, anabatic_zone_top - 20, f"Limite anabatique: {anabatic_zone_top:.0f}m", 
-            fontsize=8, ha='left', va='top', color='blue')
+            fontsize=6, ha='left', va='top')
+    ax.text(0.05, anabatic_zone_top - 20, f"Limite anab.: {anabatic_zone_top:.0f}m", 
+            fontsize=6, ha='left', va='top', color='blue')  # Abréger le texte
     
-    # Ajouter une information sur l'épaisseur de la couche
+    # Information sur l'épaisseur avec texte plus petit
     thickness = thermal_ceiling - ground_alt
     ax.text(0.5, (ground_alt + thermal_ceiling) / 2, 
             f"Épaisseur: {thickness:.0f}m", 
-            fontsize=9, ha='center', va='center', 
+            fontsize=7, ha='center', va='center', 
             bbox=dict(facecolor='white', alpha=0.7, boxstyle='round'))
     
-    # Si des inversions sont présentes, les ajouter au graphique
+    # Inversions avec texte plus petit
     if inversions:
         for i, (base, top) in enumerate(inversions):
-            if base < thermal_ceiling + 500:  # Ne montrer que les inversions pertinentes
+            if base < thermal_ceiling + 500:
                 ax.axhspan(base, top, alpha=0.15, color='red', 
-                        label=f"Inversion {i+1}" if i == 0 else "")
-                ax.text(0.05, (base + top) / 2, f"Inv. {i+1}: {base:.0f}-{top:.0f}m", 
-                        fontsize=8, ha='left', va='center', color='darkred')
+                       label=f"Inversion {i+1}" if i == 0 else "")
+                ax.text(0.05, (base + top) / 2, f"Inv{i+1}: {base:.0f}-{top:.0f}m", 
+                       fontsize=6, ha='left', va='center', color='darkred')  # Texte plus compact
     
     # Configuration des axes
     ax.set_ylim(max(0, ground_alt - 200), thermal_ceiling + 500)
     ax.set_xlim(0, 1)
-    ax.set_ylabel("Altitude (m)")
-    ax.set_xticks([])  # Supprimer les graduations de l'axe X
+    ax.set_ylabel("Altitude (m)", fontsize=7)  # Réduire la taille du label
+    ax.set_xticks([])
+    ax.tick_params(axis='y', labelsize=6)  # Réduire la taille des graduations
     
-    # Ajouter un titre au graphique
-    ax.set_title("Structure verticale de l'atmosphère", fontsize=10)
+    # Titre plus petit
+    ax.set_title("Structure verticale de l'atmosphère", fontsize=8)
     
-    # Ajouter une légende
+    # Légende plus petite et plus compacte
     ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.05), 
-            fancybox=True, shadow=True, ncol=2, fontsize=8)
+           fancybox=True, shadow=True, ncol=2, fontsize=6)  # Réduire la taille de la légende
+    
+    # Réduire les marges internes
+    plt.tight_layout(pad=1.0)
     
     return fig
 
@@ -916,7 +920,7 @@ def main():
                     """)
                 
                 # Afficher les informations de la couche convective
-                cols = st.columns([1, 2])
+                cols = st.columns([2, 1])
                 with cols[0]:
                     st.metric("Épaisseur de la couche convective", f"{convective_layer['thickness']:.0f} m")
                     st.write(f"**Qualité des ascendances**: {convective_layer['description']}")
