@@ -136,7 +136,8 @@ def calculate_convective_layer_thickness(analyzer, analysis):
     }
 
 # Fonction pour obtenir et analyser les données
-def fetch_and_analyze(lat, lon, model, site_altitude, api_key, openai_key=None, delta_t=THERMAL_TRIGGER_DELTA):
+def fetch_and_analyze(lat, lon, model, site_altitude, api_key=None, openai_key=None, delta_t=THERMAL_TRIGGER_DELTA, 
+                     data_source="open-meteo"):
     """Récupère les données et effectue l'analyse"""
     
     # Mettre à jour le delta de température si nécessaire
@@ -147,52 +148,80 @@ def fetch_and_analyze(lat, lon, model, site_altitude, api_key, openai_key=None, 
     # Initialiser le récupérateur de données
     fetcher = EmagrammeDataFetcher(api_key=api_key)
     
-    # Récupérer les données de Windy
+    # Attribuer l'altitude du site au fetcher
+    fetcher.site_altitude = site_altitude
+    
+    # Récupérer les données - avec gestion des erreurs
     try:
-        with st.spinner("Récupération des données météo..."):
-            levels = fetcher.fetch_from_windy(lat, lon, model=model)
-            
-            # Récupérer les informations sur les nuages et précipitations si disponibles
-            cloud_info = getattr(fetcher, 'cloud_info', None)
-            precip_info = getattr(fetcher, 'precip_info', None)
-            
-            # Initialiser l'analyseur avec toutes les informations
-            analyzer = EmagrammeAnalyzer(levels, site_altitude=site_altitude, 
-                                         cloud_info=cloud_info, precip_info=precip_info,
-                                         model_name=model)
-            
-            # IMPORTANT : Copier les informations directement dans l'objet analyzer
-            # pour qu'elles soient facilement accessibles par l'interface
-            analyzer.cloud_info = cloud_info
-            analyzer.precip_info = precip_info
-            
-            # Effectuer l'analyse
-            analysis = analyzer.analyze()
-            
-            # Analyse IA si une clé OpenAI est fournie
-            detailed_analysis = None
-            if openai_key:
+        if data_source == "open-meteo":
+            with st.spinner("Récupération des données météo via Open-Meteo..."):
+                st.info("Utilisation d'Open-Meteo (sans clé API)")
                 try:
-                    with st.spinner("Génération de l'analyse par l'IA..."):
-                        # Utiliser la nouvelle classe EnhancedEmagrammeAgent au lieu de EmagrammeAgent
-                        agent = EnhancedEmagrammeAgent(openai_api_key=openai_key)
-                        detailed_analysis = agent.analyze_conditions(analysis)
+                    levels = fetcher.fetch_from_openmeteo(lat, lon, model=model)
                 except Exception as e:
-                    st.error(f"Erreur lors de l'analyse IA: {str(e)}")
-                    logger.error(f"Erreur lors de l'analyse IA: {e}")
-                    # En cas d'erreur avec OpenAI, utiliser notre analyse interne améliorée
-                    with st.spinner("Utilisation de l'analyse IA améliorée interne..."):
-                        detailed_analysis = analyze_emagramme_for_pilot(analysis)
-            else:
-                # Si pas de clé OpenAI, utiliser automatiquement notre analyse interne améliorée
-                with st.spinner("Génération de l'analyse détaillée..."):
+                    st.error(f"Erreur avec Open-Meteo: {str(e)}")
+                    
+                    # Si on dispose d'une clé API Windy, essayer avec Windy
+                    if api_key:
+                        st.warning("Tentative avec l'API Windy...")
+                        # Mapper le modèle Open-Meteo vers un modèle Windy
+                        windy_model = "arome"
+                        if "arpege" in model.lower():
+                            windy_model = "iconEu"
+                            
+                        levels = fetcher.fetch_from_windy(lat, lon, model=windy_model)
+                        model = windy_model
+                        st.success("Succès avec l'API Windy!")
+                    else:
+                        raise ValueError("Impossible de récupérer les données météo. Essayez d'utiliser une clé API Windy.")
+        elif data_source == "windy":
+            with st.spinner("Récupération des données météo via Windy..."):
+                st.info("Utilisation de l'API Windy")
+                if not api_key:
+                    raise ValueError("Veuillez fournir une clé API Windy")
+                levels = fetcher.fetch_from_windy(lat, lon, model=model)
+            
+
+        # Récupérer les informations sur les nuages et précipitations si disponibles
+        cloud_info = getattr(fetcher, 'cloud_info', None)
+        precip_info = getattr(fetcher, 'precip_info', None)
+        
+        # Initialiser l'analyseur avec toutes les informations
+        analyzer = EmagrammeAnalyzer(levels, site_altitude=site_altitude, 
+                                   cloud_info=cloud_info, precip_info=precip_info,
+                                   model_name=model)
+        
+        # IMPORTANT : Copier les informations directement dans l'objet analyzer
+        # pour qu'elles soient facilement accessibles par l'interface
+        analyzer.cloud_info = cloud_info
+        analyzer.precip_info = precip_info
+        
+        # Effectuer l'analyse
+        analysis = analyzer.analyze()
+        
+        # Analyse IA si une clé OpenAI est fournie
+        detailed_analysis = None
+        if openai_key:
+            try:
+                with st.spinner("Génération de l'analyse par l'IA..."):
+                    agent = EnhancedEmagrammeAgent(openai_api_key=openai_key)
+                    detailed_analysis = agent.analyze_conditions(analysis)
+            except Exception as e:
+                st.error(f"Erreur lors de l'analyse IA: {str(e)}")
+                logger.error(f"Erreur lors de l'analyse IA: {e}")
+                # En cas d'erreur avec OpenAI, utiliser notre analyse interne améliorée
+                with st.spinner("Utilisation de l'analyse IA améliorée interne..."):
                     detailed_analysis = analyze_emagramme_for_pilot(analysis)
-            
-            return analyzer, analysis, detailed_analysis
-            
+        else:
+            # Si pas de clé OpenAI, utiliser automatiquement notre analyse interne améliorée
+            with st.spinner("Génération de l'analyse détaillée..."):
+                detailed_analysis = analyze_emagramme_for_pilot(analysis)
+        
+        return analyzer, analysis, detailed_analysis
+        
     except Exception as e:
         st.error(f"Erreur lors de la récupération ou de l'analyse des données: {str(e)}")
-        logger.error(f"Erreur lors de la récupération/analyse: {e}")
+        logger.error(f"Erreur lors de la récupération/analyse: {e}", exc_info=True)
         return None, None, None
 
 def analyze_inversions_impact(analysis):
@@ -424,9 +453,57 @@ def main():
     # Sidebar pour les entrées utilisateur
     st.sidebar.header("Configuration")
     
-    # Entrée de l'API key Windy
-    api_key = st.sidebar.text_input("Clé API Windy", type="password", 
-                                  help="Requis pour récupérer les données météo")
+    # Section pour la source des données
+    st.sidebar.header("Source des données")
+    data_source = st.sidebar.radio(
+        "Sélectionnez une source de données",
+        options=["Open-Meteo (sans clé API)", "API Windy"],
+        index=0,  # Option par défaut : Open-Meteo
+        help="Choisissez la source pour récupérer les données météorologiques"
+    )
+
+    use_openmeteo = (data_source == "Open-Meteo (sans clé API)")
+    use_windy = (data_source == "API Windy")
+
+    # Modèle météo en fonction de la source de données
+    if use_openmeteo:
+        model_options = ["meteofrance_arome_france_hd", "meteofrance_arpege_europe"]
+        model_descriptions = {
+            "meteofrance_arome_france_hd": "AROME HD (France ~2km)",
+            "meteofrance_arpege_europe": "ARPEGE (Europe ~11km)"
+        }
+        model_labels = [model_descriptions[m] for m in model_options]
+        model_index = st.sidebar.selectbox(
+            "Modèle météo",
+            options=range(len(model_options)),
+            format_func=lambda i: model_labels[i],
+            index=0
+        )
+        model = model_options[model_index]
+        
+        st.sidebar.info("Open-Meteo fournit un accès aux modèles Météo-France sans clé API")
+        
+        # Pas besoin de clé API pour Open-Meteo
+        api_key = None
+    else:  # use_windy
+        model_options = ["arome", "gfs", "iconEu"]
+        model_descriptions = {
+            "arome": "AROME (France ~2.5km)",
+            "gfs": "GFS (Mondial ~27km)",
+            "iconEu": "ICON-EU (Europe ~7km)"
+        }
+        model_labels = [model_descriptions[m] for m in model_options]
+        model_index = st.sidebar.selectbox(
+            "Modèle météo",
+            options=range(len(model_options)),
+            format_func=lambda i: model_labels[i],
+            index=0
+        )
+        model = model_options[model_index]
+        
+        # Clé API nécessaire pour Windy
+        api_key = st.sidebar.text_input("Clé API Windy", type="password", 
+                                      help="Requis pour récupérer les données météo via Windy")
     
     # Option pour clé OpenAI (analyse IA)
     use_ai = st.sidebar.checkbox("Utiliser l'analyse IA externe (OpenAI)", value=False,
@@ -490,30 +567,37 @@ def main():
                                       value=st.session_state.site_selection["altitude"], 
                                       step=10)
     
-    # Modèle météo avec sélection par défaut basée sur le site prédéfini
-    model = st.selectbox("Modèle météo", 
-                       options=["gfs", "arome", "iconEu"],
-                       index=["gfs", "arome", "iconEu"].index(st.session_state.site_selection["model"]),
-                       help="GFS: mondial (27km), Arome: Europe (2.5km), IconEu: Europe (7km)")
+    # Si un site prédéfini est sélectionné, utiliser son modèle associé
+    if not use_openmeteo and not use_windy:
+        # Afficher un sélecteur de modèle si aucune source n'est encore sélectionnée
+        model = st.selectbox("Modèle météo", 
+                           options=["arome", "gfs", "iconEu"],
+                           index=["arome", "gfs", "iconEu"].index(st.session_state.site_selection.get("model", "arome")),
+                           help="GFS: mondial (27km), Arome: Europe (2.5km), IconEu: Europe (7km)")
     
     # Bouton pour lancer l'analyse
     analyze_clicked = st.button("Analyser l'émagramme")
     
     # Lancer l'analyse si le bouton est cliqué ou si un site prédéfini a été sélectionné
     should_run_analysis = analyze_clicked or st.session_state.run_analysis
-    
+
     if should_run_analysis:
         # Réinitialiser le flag pour éviter des analyses en boucle
         st.session_state.run_analysis = False
         
-        if not api_key:
-            st.error("Veuillez entrer une clé API Windy pour continuer.")
+        # Vérification de la clé API pour Windy
+        if use_windy and not api_key:
+            st.error("Veuillez entrer une clé API Windy pour utiliser cette source de données.")
         else:
+            # Déterminer la source de données pour la fonction fetch_and_analyze
+            data_source_str = "open-meteo" if use_openmeteo else "windy"
+            
             # Récupérer et analyser les données
             analyzer, analysis, detailed_analysis = fetch_and_analyze(
-                latitude, longitude, model, site_altitude, api_key, openai_key, delta_t
+                latitude, longitude, model, site_altitude, api_key, openai_key, delta_t, data_source=data_source_str
             )
             
+            # Le reste du code reste identique
             if analyzer and analysis:
                 # Onglets pour organiser les résultats
                 tab1, tab2, tab3, tab4 = st.tabs(["Émagramme", "Résultats", "Données brutes", "Aide"])

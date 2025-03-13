@@ -18,3 +18,11 @@ cartopy
 
 # Optionnel: pour une visualisation améliorée
 seaborn
+
+# metofetch
+meteofetch
+xarray
+streamlit
+requests-cache
+retry-requests
+openmeteo-requests

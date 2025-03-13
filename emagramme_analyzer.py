@@ -2338,6 +2338,322 @@ class EmagrammeDataFetcher:
         """
         self.api_key = api_key
     
+
+    def fetch_from_openmeteo(self, latitude, longitude, model="meteofrance_arome_france_hd", timestep=0):
+        """
+        Récupère les données d'émagramme depuis l'API Open-Meteo (sans clé API)
+        
+        Args:
+            latitude: Latitude du point d'intérêt
+            longitude: Longitude du point d'intérêt
+            model: Modèle météo à utiliser ('meteofrance_arome_france_hd', 'meteofrance_arome_france', 'meteofrance_arpege_europe')
+            timestep: Pas de temps pour la prévision (0 = analyse)
+            
+        Returns:
+            Liste d'objets AtmosphericLevel et informations sur les nuages
+        """
+        try:
+            # Importer les packages nécessaires
+            try:
+                import openmeteo_requests
+                import requests_cache
+                from retry_requests import retry
+            except ImportError as e:
+                logger.error(f"Packages requis non installés: {e}")
+                logger.error("Installez les packages avec 'pip install openmeteo-requests requests-cache retry-requests'")
+                raise ImportError("Packages requis pour Open-Meteo non installés")
+            
+            logger.info(f"Récupération des données via Open-Meteo (modèle {model})")
+            
+            # Setup the Open-Meteo API client with cache and retry
+            cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
+            retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
+            openmeteo = openmeteo_requests.Client(session=retry_session)
+            
+            # Définir les niveaux de pression standard
+            pressure_levels = [1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30]
+            
+            # Variables combinées pour les différents niveaux de pression
+            hourly_vars = [
+                "temperature_2m", "dew_point_2m", "relative_humidity_2m",
+                "cloud_cover", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high",
+                "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m",
+                "precipitation_probability", "rain"
+            ]
+            
+            # Ajouter les variables à différents niveaux de pression
+            for level in pressure_levels:
+                hourly_vars.extend([
+                    f"temperature_{level}hPa",
+                    f"relative_humidity_{level}hPa",
+                    f"wind_speed_{level}hPa",
+                    f"wind_direction_{level}hPa",
+                    f"geopotential_height_{level}hPa"
+                ])
+            
+            # Construire les paramètres de requête
+            params = {
+                "latitude": latitude,
+                "longitude": longitude,
+                "hourly": hourly_vars,
+                "models": [model],
+                "forecast_days": 1
+            }
+            
+            # Effectuer la requête API
+            try:
+                logger.info("Envoi de la requête à Open-Meteo...")
+                responses = openmeteo.weather_api("https://api.open-meteo.com/v1/forecast", params=params)
+                response = responses[0]
+                logger.info(f"Réponse reçue pour les coordonnées {response.Latitude()}°N {response.Longitude()}°E")
+            except Exception as e:
+                logger.error(f"Erreur lors de la requête API Open-Meteo: {e}")
+                raise
+            
+            # Récupérer les données horaires
+            hourly = response.Hourly()
+            
+            # Construire un dictionnaire pour accéder facilement aux variables par nom
+            hourly_data = {}
+            
+            # Créer la timeline
+            hourly_data["date"] = pd.date_range(
+                start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
+                end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
+                freq=pd.Timedelta(seconds=hourly.Interval()),
+                inclusive="left"
+            )
+            
+            # Extraire chaque variable par index
+            for i in range(hourly.VariablesLength()):
+                var = hourly.Variables(i)
+                # Nous extrayons directement les valeurs sans utiliser Name()
+                hourly_data[hourly_vars[i]] = var.ValuesAsNumpy()
+            
+            # Créer un DataFrame pandas
+            hourly_df = pd.DataFrame(data=hourly_data)
+            
+            # Récupérer les données pour le timestep spécifié
+            current_data = hourly_df.iloc[min(timestep, len(hourly_df)-1)]
+            
+            # Initialiser les niveaux atmosphériques
+            levels = []
+            
+            # Informations pour la surface
+            self.cloud_info = {}
+            
+            # Récupérer les informations sur les nuages si disponibles
+            if "cloud_cover_low" in current_data and not pd.isna(current_data["cloud_cover_low"]):
+                self.cloud_info["low_clouds"] = float(current_data["cloud_cover_low"])
+            else:
+                self.cloud_info["low_clouds"] = 0.0
+                
+            if "cloud_cover_mid" in current_data and not pd.isna(current_data["cloud_cover_mid"]):
+                self.cloud_info["mid_clouds"] = float(current_data["cloud_cover_mid"])
+            else:
+                self.cloud_info["mid_clouds"] = 0.0
+                
+            if "cloud_cover_high" in current_data and not pd.isna(current_data["cloud_cover_high"]):
+                self.cloud_info["high_clouds"] = float(current_data["cloud_cover_high"])
+            else:
+                self.cloud_info["high_clouds"] = 0.0
+            
+            # Information sur les précipitations
+            self.precip_info = {
+                "type": 0,  # 0 = pas de précipitation par défaut
+                "description": "Pas de précipitation"
+            }
+            
+            # Analyser les précipitations si les données sont disponibles
+            if "rain" in current_data and not pd.isna(current_data["rain"]):
+                rain_value = float(current_data["rain"])
+                
+                if "precipitation_probability" in current_data and not pd.isna(current_data["precipitation_probability"]):
+                    precip_prob = float(current_data["precipitation_probability"]) 
+                else:
+                    precip_prob = 0
+                    
+                if rain_value > 0.5 or precip_prob > 50:
+                    self.precip_info = {
+                        "type": 1,  # 1 = pluie
+                        "description": "Pluie"
+                    }
+                    
+                    # Si température < 0, considérer comme neige
+                    if "temperature_2m" in current_data and not pd.isna(current_data["temperature_2m"]) and float(current_data["temperature_2m"]) < 0:
+                        self.precip_info = {
+                            "type": 5,  # 5 = neige
+                            "description": "Neige"
+                        }
+                    elif "temperature_2m" in current_data and not pd.isna(current_data["temperature_2m"]) and float(current_data["temperature_2m"]) < 3:
+                        self.precip_info = {
+                            "type": 7,  # 7 = mélange pluie et neige
+                            "description": "Mélange pluie et neige"
+                        }
+            
+            # Créer un niveau pour la surface
+            surface_altitude = self.site_altitude if hasattr(self, 'site_altitude') and self.site_altitude is not None else 0
+            surface_pressure = 1013.25  # Pression standard au niveau de la mer
+            
+            # Estimer la pression au niveau du site si l'altitude est connue
+            if surface_altitude > 0:
+                # Formule barométrique inverse
+                surface_pressure = 1013.25 * (1 - (surface_altitude / 44330)) ** 5.255
+            
+            # Paramètres de surface
+            if "temperature_2m" in current_data and not pd.isna(current_data["temperature_2m"]):
+                surface_temp = float(current_data["temperature_2m"])
+            else:
+                surface_temp = 15.0  # Valeur par défaut si non disponible
+                
+            if "dew_point_2m" in current_data and not pd.isna(current_data["dew_point_2m"]):
+                surface_dew_point = float(current_data["dew_point_2m"])
+            else:
+                surface_dew_point = 10.0  # Valeur par défaut si non disponible
+                
+            if "wind_direction_10m" in current_data and not pd.isna(current_data["wind_direction_10m"]):
+                surface_wind_dir = float(current_data["wind_direction_10m"])
+            else:
+                surface_wind_dir = 0.0  # Valeur par défaut si non disponible
+                
+            if "wind_speed_10m" in current_data and not pd.isna(current_data["wind_speed_10m"]):
+                surface_wind_speed = float(current_data["wind_speed_10m"])
+            else:
+                surface_wind_speed = 0.0  # Valeur par défaut si non disponible
+            
+            # Créer le niveau de surface
+            surface_level = AtmosphericLevel(
+                altitude=surface_altitude,
+                pressure=surface_pressure,
+                temperature=surface_temp,
+                dew_point=surface_dew_point,
+                wind_direction=surface_wind_dir,
+                wind_speed=surface_wind_speed
+            )
+            
+            levels.append(surface_level)
+            
+            # Niveaux de pression disponibles
+            available_levels = {}
+            
+            # Vérifier quels niveaux de pression sont disponibles
+            for pressure in pressure_levels:
+                temp_key = f"temperature_{pressure}hPa"
+                geo_key = f"geopotential_height_{pressure}hPa"
+                rh_key = f"relative_humidity_{pressure}hPa"
+                wspd_key = f"wind_speed_{pressure}hPa"
+                wdir_key = f"wind_direction_{pressure}hPa"
+                
+                if temp_key in current_data and not pd.isna(current_data[temp_key]):
+                    # Récupérer la température
+                    temp = float(current_data[temp_key])
+                    
+                    # Altitude géopotentielle - utiliser la valeur si disponible, sinon estimer
+                    if geo_key in current_data and not pd.isna(current_data[geo_key]):
+                        altitude = float(current_data[geo_key])
+                    else:
+                        # Formule barométrique simplifiée si non disponible
+                        altitude = 44330 * (1 - (pressure / 1013.25) ** 0.1903)
+                    
+                    # Ignorer si l'altitude est inférieure à l'altitude de surface
+                    if altitude <= surface_altitude:
+                        continue
+                    
+                    # Humidité relative - utiliser la valeur si disponible, sinon valeur par défaut
+                    if rh_key in current_data and not pd.isna(current_data[rh_key]):
+                        rh = float(current_data[rh_key])
+                    else:
+                        rh = 50.0  # Valeur par défaut
+                    
+                    # Calculer le point de rosée à partir de RH et température
+                    # Formule de Magnus
+                    alpha = 17.27
+                    beta = 237.7
+                    gamma = (alpha * temp) / (beta + temp) + np.log(rh/100.0)
+                    dew_point = (beta * gamma) / (alpha - gamma)
+                    
+                    # Limiter le point de rosée à la température
+                    if dew_point > temp:
+                        dew_point = temp
+                    
+                    # Vent - utiliser les valeurs si disponibles, sinon valeurs par défaut
+                    if wspd_key in current_data and not pd.isna(current_data[wspd_key]):
+                        wind_speed = float(current_data[wspd_key])
+                    else:
+                        wind_speed = surface_wind_speed + 5 * (altitude - surface_altitude) / 1000
+                    
+                    if wdir_key in current_data and not pd.isna(current_data[wdir_key]):
+                        wind_direction = float(current_data[wdir_key])
+                    else:
+                        wind_direction = (surface_wind_dir + 20 * (altitude - surface_altitude) / 1000) % 360
+                    
+                    # Stocker ce niveau
+                    available_levels[altitude] = {
+                        "pressure": pressure,
+                        "temperature": temp,
+                        "dew_point": dew_point,
+                        "wind_direction": wind_direction,
+                        "wind_speed": wind_speed
+                    }
+            
+            # Si nous n'avons pas assez de niveaux, générer des niveaux supplémentaires
+            if len(available_levels) < 3:
+                logger.warning(f"Seulement {len(available_levels)} niveaux valides trouvés, génération de niveaux supplémentaires")
+                
+                # Générer des niveaux tous les 1000m jusqu'à 10000m
+                for altitude in range(1000, 11000, 1000):
+                    if altitude not in available_levels and altitude > surface_altitude:
+                        # Estimer la pression avec la formule barométrique
+                        pressure = 1013.25 * (1 - (altitude / 44330)) ** 5.255
+                        
+                        # Estimer la température avec un gradient standard de -6.5°C/km
+                        temp = surface_temp - 6.5 * (altitude - surface_altitude) / 1000
+                        
+                        # Estimer le point de rosée (plus sec en altitude)
+                        dew_point = surface_dew_point - 8 * (altitude - surface_altitude) / 1000
+                        
+                        # Augmenter la vitesse du vent avec l'altitude
+                        wind_speed = surface_wind_speed + 5 * (altitude - surface_altitude) / 1000
+                        
+                        # Rotation légère du vent avec l'altitude (vers la droite)
+                        wind_direction = (surface_wind_dir + 20 * (altitude - surface_altitude) / 1000) % 360
+                        
+                        # Ajouter ce niveau estimé
+                        available_levels[altitude] = {
+                            "pressure": pressure,
+                            "temperature": temp,
+                            "dew_point": dew_point,
+                            "wind_direction": wind_direction,
+                            "wind_speed": wind_speed
+                        }
+            
+            # Ajouter tous les niveaux à notre liste
+            for altitude, data in sorted(available_levels.items()):
+                level = AtmosphericLevel(
+                    altitude=altitude,
+                    pressure=data["pressure"],
+                    temperature=data["temperature"],
+                    dew_point=data["dew_point"],
+                    wind_direction=data["wind_direction"],
+                    wind_speed=data["wind_speed"]
+                )
+                levels.append(level)
+            
+            # Trier les niveaux par altitude croissante
+            levels.sort(key=lambda x: x.altitude)
+            
+            # Si nous n'avons toujours pas assez de niveaux, lever une exception
+            if len(levels) < 4:  # Surface + au moins 3 niveaux
+                raise ValueError(f"Données de profil vertical insuffisantes dans la réponse Open-Meteo: seulement {len(levels)} niveaux")
+            
+            logger.info(f"Données récupérées: {len(levels)} niveaux atmosphériques de Open-Meteo")
+            
+            return levels
+            
+        except Exception as e:
+            logger.error(f"Erreur lors de la récupération des données Open-Meteo: {e}")
+            raise
+
     def fetch_from_windy(self, latitude, longitude, model="arome", timestamp=None):
         """
         Récupère les données d'émagramme depuis l'API Windy
@@ -2646,23 +2962,8 @@ class EmagrammeDataFetcher:
         except Exception as e:
             logger.error(f"Erreur lors de la récupération des données Windy: {e}")
             raise
-            
-    def fetch_from_meteociel(self, station_id, timestamp=None):
-        """
-        Récupère les données d'émagramme depuis Meteociel
-        
-        Args:
-            station_id: Identifiant de la station météo
-            timestamp: Horodatage pour la prévision (None = maintenant)
-            
-        Returns:
-            Liste d'objets AtmosphericLevel
-        """
-        # Cette fonction n'est pas implémentée dans ce prototype
-        # car Meteociel ne propose pas d'API officielle
-        logger.warning("La récupération depuis Meteociel n'est pas encore implémentée")
-        return []
-        
+
+    
     def parse_csv_data(self, csv_text):
         """
         Parse les données d'émagramme au format CSV
@@ -2780,8 +3081,56 @@ def main():
     fetcher = EmagrammeDataFetcher(api_key=args.api_key)
     
     # Récupérer les données
+    # Récupérer les données
     levels = []
     cloud_info = None
+    precip_info = None
+
+    if args.file:
+        try:
+            logger.info(f"Chargement des données depuis le fichier {args.file}")
+            levels = fetcher.load_from_file(args.file)
+        except Exception as e:
+            logger.error(f"Erreur lors du chargement du fichier: {e}")
+            sys.exit(1)
+    elif args.location:
+        try:
+            lat, lon = map(float, args.location.split(','))
+            
+            # Vérifier si on utilise l'API Windy ou MeteoFetch
+            if args.api_key:
+                logger.info(f"Récupération des données via Windy pour la position {lat}, {lon} avec le modèle {args.model}")
+                levels = fetcher.fetch_from_windy(lat, lon, model=args.model)
+            else:
+                logger.info(f"Récupération des données via MeteoFetch pour la position {lat}, {lon} avec le modèle {args.model}")
+                levels = fetcher.fetch_from_meteofrance(lat, lon, model=args.model)
+            
+            # Récupérer les informations sur les nuages et précipitations depuis le fetcher
+            cloud_info = None
+            precip_info = None
+            if hasattr(fetcher, 'cloud_info'):
+                cloud_info = fetcher.cloud_info
+            if hasattr(fetcher, 'precip_info'):
+                precip_info = fetcher.precip_info
+
+        except Exception as e:
+            logger.error(f"Erreur lors de la récupération des données: {e}")
+            sys.exit(1)
+    else:
+        logger.error("Veuillez spécifier un fichier de données ou une localisation")
+        parser.print_help()
+        sys.exit(1)
+    
+    # Vérifier si des niveaux ont été récupérés
+    if not levels:
+        logger.error("Aucune donnée atmosphérique n'a été récupérée")
+        sys.exit(1)
+        
+    logger.info(f"Données récupérées: {len(levels)} niveaux atmosphériques")
+    
+    # Initialiser l'analyseur avec les informations sur les nuages
+    model_name = args.model if args.location else "Fichier local"
+    analyzer = EmagrammeAnalyzer(levels, site_altitude=args.site_altitude, cloud_info=cloud_info, precip_info=precip_info, model_name=model_name)
     
     if args.file:
         try:
