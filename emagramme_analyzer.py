@@ -27,7 +27,7 @@ from io import StringIO
 import logging
 import sys
 from datetime import datetime
-import re
+
 
 # Configuration du logging
 logging.basicConfig(
@@ -1036,536 +1036,67 @@ class EmagrammeAnalyzer:
                         layer_analysis[layer_name]["dominant_dir"] = counts.most_common(1)[0][0]
         
         return layer_analysis
-
-    def plot_emagramme_with_llm_analysis(self, analysis=None, llm_analysis=None, save_path=None, show=True):
-        """
-        Trace l'émagramme avec les résultats de l'analyse et l'analyse LLM
-        
-        Args:
-            analysis: Résultats de l'analyse (si None, l'analyse sera effectuée)
-            llm_analysis: Analyse textuelle du LLM (OpenAI)
-            save_path: Chemin pour sauvegarder l'image (optionnel)
-            show: Afficher le graphique (défaut: True)
-            
-        Returns:
-            Figure matplotlib
-        """
-        if analysis is None:
-            analysis = self.analyze()
-        
-        # Créer une figure avec deux sous-graphiques
-        fig = plt.figure(figsize=(16, 12))
-        
-        # Diviser l'espace: émagramme à gauche (plus grand), analyse IA à droite (plus petit)
-        gs = plt.GridSpec(1, 4, figure=fig)
-        ax = fig.add_subplot(gs[0, :3])  # L'émagramme occupe 3/4 de la largeur
-        ax_text = fig.add_subplot(gs[0, 3])  # L'analyse IA occupe 1/4 de la largeur
-        
-        # Définir les limites d'altitude
-        alt_min = max(0, self.site_altitude - 500)
-        alt_max = min(12000, max(self.altitudes) + 500)
-        
-        # Définir les limites de température
-        temp_min = min(min(self.temperatures) - 10, min(self.dew_points) - 5, -20)
-        temp_max = max(max(self.temperatures) + 10, analysis.ground_temperature + THERMAL_TRIGGER_DELTA + 10, 40)
-        
-        # Tracer les grilles
-        for temp in range(-80, 50, 10):
-            ax.plot([temp, temp], [alt_min, alt_max], 'gray', alpha=0.3, linestyle='--', linewidth=0.5)
-        
-        # Niveaux de pression (hPa)
-        pressure_levels = [1000, 950, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400, 350, 300]
-        for pressure in pressure_levels:
-            # Convertir pression en altitude approximative
-            altitude = 44330 * (1 - (pressure / 1013.25) ** 0.1903)
-            if alt_min <= altitude <= alt_max:
-                ax.plot([temp_min, temp_max], [altitude, altitude], 'gray', alpha=0.3, linestyle='--', linewidth=0.5)
-                ax.text(temp_min, altitude, f"{pressure} hPa", fontsize=5, ha='right', va='center')
-        
-        # Tracer la courbe d'état (température)
-        ax.plot(self.temperatures, self.altitudes, 'r-', linewidth=2, label='Courbe d\'état')
-        
-        # Tracer la courbe du point de rosée
-        ax.plot(self.dew_points, self.altitudes, 'b-', linewidth=2, label='Point de rosée')
-        
-        # Tracer le niveau du sol
-        ax.axhline(y=self.site_altitude, color='brown', linestyle='-', linewidth=2, label='Sol')
-        
-        # Ajouter une représentation visuelle des couches nuageuses
-        if analysis.low_cloud_cover is not None or analysis.mid_cloud_cover is not None or analysis.high_cloud_cover is not None:
-            # Zones d'altitude pour les différentes couches de nuages
-            # Nuages bas: surface à 800 hPa (environ 2000m)
-            # Nuages moyens: 800 hPa à 450 hPa (environ 2000m à 6500m)
-            # Nuages hauts: au-dessus de 450 hPa (environ 6500m et plus)
-            
-            # Convertir pression en altitude approximative
-            alt_800hpa = 44330 * (1 - (800 / 1013.25) ** 0.1903)  # ~2000m
-            alt_450hpa = 44330 * (1 - (450 / 1013.25) ** 0.1903)  # ~6500m
-            
-            # Ne pas dépasser les limites du graphique
-            alt_min = max(0, self.site_altitude - 500)
-            alt_max = min(12000, max(self.altitudes) + 500)
-            
-            # Définir les limites de température
-            temp_min = min(min(self.temperatures) - 10, min(self.dew_points) - 5, -20)
-            temp_max = max(max(self.temperatures) + 10, analysis.ground_temperature + THERMAL_TRIGGER_DELTA + 10, 40)
-            
-            # Marge pour les symboles de nuages
-            margin = (temp_max - temp_min) * 0.05
-            cloud_x_pos = temp_max - margin
-            
-            # Nuages bas
-            if analysis.low_cloud_cover is not None:
-                coverage = analysis.low_cloud_cover / 100.0  # Convertir en fraction
-                if coverage > 0:
-                    # Dessiner un symbole de nuage proportionnel à la couverture
-                    y_low = (alt_min + alt_800hpa) / 2
-                    cloud_size = coverage * 5  # Taille proportionnelle à la couverture
-                    ax.text(cloud_x_pos, y_low, "☁️", fontsize=8+cloud_size*2, ha='center', va='center',
-                        color='blue', alpha=0.7)
-                    ax.text(cloud_x_pos, y_low - 200, f"{analysis.low_cloud_cover:.0f}%", fontsize=8, 
-                        ha='center', va='top', color='blue')
-            
-            # Nuages moyens
-            if analysis.mid_cloud_cover is not None:
-                coverage = analysis.mid_cloud_cover / 100.0
-                if coverage > 0:
-                    y_mid = (alt_800hpa + alt_450hpa) / 2
-                    cloud_size = coverage * 5
-                    ax.text(cloud_x_pos, y_mid, "☁️", fontsize=8+cloud_size*2, ha='center', va='center',
-                        color='darkblue', alpha=0.7)
-                    ax.text(cloud_x_pos, y_mid - 200, f"{analysis.mid_cloud_cover:.0f}%", fontsize=8, 
-                        ha='center', va='top', color='darkblue')
-            
-            # Nuages hauts
-            if analysis.high_cloud_cover is not None:
-                coverage = analysis.high_cloud_cover / 100.0
-                if coverage > 0:
-                    y_high = (alt_450hpa + alt_max) / 2
-                    cloud_size = coverage * 5
-                    ax.text(cloud_x_pos, y_high, "☁️", fontsize=8+cloud_size*2, ha='center', va='center',
-                        color='purple', alpha=0.7)
-                    ax.text(cloud_x_pos, y_high - 200, f"{analysis.high_cloud_cover:.0f}%", fontsize=8, 
-                        ha='center', va='top', color='purple')
-        
-        if analysis:
-            # Créer un texte pour le spread
-            spread_text = f"ANALYSE DU SPREAD (T° - Td)\n"
-            spread_text += f"Au sol: {analysis.ground_spread:.1f}°C\n"
-            
-            if analysis.spread_levels:
-                for level, value in analysis.spread_levels.items():
-                    spread_text += f"Niveau {level}: {value:.1f}°C\n"
-            
-            spread_text += f"\n{analysis.spread_analysis}"
-            
-            # Position du texte
-            spread_box_x = temp_min + (temp_max - temp_min) * 0.6
-            spread_box_y = alt_max - (alt_max - alt_min) * 0.3
-            
-            # Ajouter le texte avec un fond
-            props = dict(boxstyle='round', facecolor='lightyellow', alpha=0.8)
-            ax.text(spread_box_x, spread_box_y, spread_text, fontsize=8, 
-                    bbox=props, verticalalignment='bottom', horizontalalignment='left')
-            
-            # Ajouter une visualisation des couches atmosphériques
-            if hasattr(analysis, 'atmospheric_layers'):
-                layers_text = "COUCHES ATMOSPHÉRIQUES\n"
-                
-                for layer_name, layer_data in analysis.atmospheric_layers.items():
-                    # Utiliser les limites théoriques au lieu des altitudes calculées
-                    bottom = layer_data.get("theoretical_bottom")
-                    top = layer_data.get("theoretical_top")
-                    
-                    # Si l'une des limites est 'inf', utiliser une valeur plus lisible
-                    if top == float('inf'):
-                        top = 9000  # Ou une autre valeur représentative de la haute atmosphère
-                    
-                    layers_text += f"{layer_name.capitalize()}: {bottom:.0f}-{top:.0f}m\n"
-                    
-                    if "mean_wind" in layer_data and layer_data["mean_wind"] is not None:
-                        layers_text += f"  Vent moyen: {layer_data['mean_wind']:.0f} km/h"
-                        if "dominant_dir" in layer_data:
-                            layers_text += f" ({layer_data['dominant_dir']})\n"
-                        else:
-                            layers_text += "\n"
-                    
-                    if layer_data["stability"] != "données insuffisantes":
-                        layers_text += f"  Stabilité: {layer_data['stability']}\n"
-                    else:
-                        layers_text += "  Stabilité: données insuffisantes\n"
-                
-                # Position du texte des couches
-                layers_box_x = temp_min + (temp_max - temp_min) * 0.6
-                layers_box_y = alt_min + (alt_max - alt_min) * 0.5
-                
-                # Ajouter le texte des couches
-                props = dict(boxstyle='round', facecolor='lightgreen', alpha=0.8)
-                ax.text(layers_box_x, layers_box_y, layers_text, fontsize=8, 
-                        bbox=props, verticalalignment='bottom', horizontalalignment='left')
-        
-        # Paramètres pour l'analyse
-        if analysis:
-            # Température de déclenchement
-            trigger_temp = analysis.ground_temperature + THERMAL_TRIGGER_DELTA
-            
-            # Tracer le chemin du thermique
-            thermal_altitudes, thermal_temps = self._calculate_thermal_path(trigger_temp, self.site_altitude)
-            ax.plot(thermal_temps, thermal_altitudes, 'g--', linewidth=1.5, label='Chemin du thermique')
-            
-            # Tracer le chemin du point de rosée
-            dew_altitudes, dew_temps = self._calculate_dew_point_path(analysis.ground_dew_point, self.site_altitude)
-            
-            # Tracer le plafond des thermiques
-            ax.axhline(y=analysis.thermal_ceiling, color='purple', linestyle='-.', linewidth=1.5, 
-                    label=f'Plafond thermique ({analysis.thermal_ceiling:.0f}m)')
-            
-            # Tracer la base et le sommet des nuages si présents
-            if analysis.cloud_base:
-                ax.axhline(y=analysis.cloud_base, color='skyblue', linestyle='-.', linewidth=1.5,
-                        label=f'Base des cumulus ({analysis.cloud_base:.0f}m)')
-                
-                # Chemin adiabatique humide
-                if analysis.cloud_top:
-                    moist_altitudes, moist_temps = self._calculate_moist_adiabatic_path(
-                        analysis.cloud_base, thermal_temps, thermal_altitudes)
-                    ax.plot(moist_temps, moist_altitudes, 'g-.', linewidth=1.5, label='Chemin après condensation')
-                    
-                    ax.axhline(y=analysis.cloud_top, color='navy', linestyle='-.', linewidth=1.5,
-                            label=f'Sommet des cumulus ({analysis.cloud_top:.0f}m)')
-            
-            # Tracer les couches d'inversion
-            for i, (base, top) in enumerate(analysis.inversion_layers):
-                ax.axhspan(base, top, alpha=0.2, color='orange', 
-                        label=f'Inversion {i+1} ({base:.0f}-{top:.0f}m)' if i == 0 else "")
-            
-            # Définir les limites de la couche convective
-            conv_layer_base = analysis.ground_altitude
-            conv_layer_top = analysis.thermal_ceiling
-            anabatic_top = min(conv_layer_base + 500, conv_layer_top)
-
-            # Code de débogage
-            print(f"DEBUG - Sol: {conv_layer_base}, Plafond: {conv_layer_top}, Différence: {conv_layer_top - conv_layer_base}")
-
-            # S'assurer que la couche a une épaisseur minimale pour être visible
-            if conv_layer_top - conv_layer_base < 10:
-                conv_layer_top = conv_layer_base + 10  # Garantir une épaisseur minimale
-
-            # Ajouter la couche convective avec plus de visibilité
-            ax.axhspan(conv_layer_base, conv_layer_top, alpha=0.4, color='limegreen', 
-                    hatch='////', label='Couche convective', zorder=5)
-
-            # Ajouter la couche anabatique avec plus de visibilité
-            if anabatic_top > conv_layer_base:
-                ax.axhspan(conv_layer_base, anabatic_top, alpha=0.3, color='skyblue', 
-                        hatch='\\\\\\', label='Couche anabatique', zorder=6)
-
-            # Ajouter des lignes de délimitation très visibles
-            ax.axhline(y=conv_layer_base, color='darkgreen', linestyle='-', linewidth=2.0, alpha=0.9, zorder=7)
-            ax.axhline(y=conv_layer_top, color='darkgreen', linestyle='-', linewidth=2.0, alpha=0.9, zorder=7)
-            ax.axhline(y=anabatic_top, color='darkblue', linestyle='--', linewidth=2.0, alpha=0.9, zorder=7)
-
-            # Ajouter des étiquettes textuelles plus visibles
-            ax.text(temp_min + 5, conv_layer_base + 50, f"Sol: {conv_layer_base:.0f}m", 
-                    fontsize=9, color='darkgreen', ha='left', va='bottom', 
-                    bbox=dict(facecolor='white', alpha=0.8, boxstyle='round'), zorder=8)
-            ax.text(temp_min + 5, conv_layer_top - 50, f"Plafond: {conv_layer_top:.0f}m", 
-                    fontsize=9, color='darkgreen', ha='left', va='top', 
-                    bbox=dict(facecolor='white', alpha=0.8, boxstyle='round'), zorder=8)
-            
-            # Afficher les vents si disponibles
-            if self.wind_directions is not None and self.wind_speeds is not None:
-                # Sélectionner quelques niveaux pour afficher les vents
-                indices = np.linspace(0, len(self.altitudes)-1, min(10, len(self.altitudes))).astype(int)
-                
-                # Définir la position de la barre avec décalage plus important vers la gauche
-                bar_x_start = temp_max - 12  # Position de départ de la barre décalée vers la gauche
-                bar_x_end = temp_max - 5     # Position de fin de la barre décalée vers la gauche
-                bar_width = bar_x_end - bar_x_start
-                
-                # Dessiner une grille de référence pour les vents
-                # Dessiner un fond rectangulaire pour la zone de vent
-                rect_min_y = min(self.altitudes[indices[0]], alt_min)
-                rect_max_y = max(self.altitudes[indices[-1]], alt_max)
-                rect_height = rect_max_y - rect_min_y
-                ax.add_patch(plt.Rectangle((bar_x_start - 0.5, rect_min_y - rect_height*0.05), 
-                                        bar_width + 1, rect_height*1.1, 
-                                        facecolor='lightskyblue', alpha=0.2, edgecolor='skyblue'))
-                
-                # Ligne de référence pour 0 km/h
-                y_0km = rect_min_y - rect_height*0.02
-                ax.plot([bar_x_start, bar_x_end], [y_0km, y_0km], 
-                        'b-', linewidth=1, alpha=0.5)
-                ax.text(bar_x_start - 0.3, y_0km, "0", fontsize=6, ha='right', va='center')
-                
-                # Ligne de référence pour 25 km/h
-                y_25km = rect_min_y - rect_height*0.02 + rect_height*0.25
-                ax.plot([bar_x_start, bar_x_end], [y_25km, y_25km], 
-                        'b-', linewidth=1, alpha=0.5)
-                ax.text(bar_x_start - 0.3, y_25km, "25", fontsize=6, ha='right', va='center')
-                
-                # Ligne de référence pour 50 km/h
-                y_50km = rect_min_y - rect_height*0.02 + rect_height*0.5
-                ax.plot([bar_x_start, bar_x_end], [y_50km, y_50km], 
-                        'b-', linewidth=1, alpha=0.5)
-                ax.text(bar_x_start - 0.3, y_50km, "50", fontsize=6, ha='right', va='center')
-                
-                # Titre pour la section du vent
-                ax.text((bar_x_start + bar_x_end)/2, rect_max_y + rect_height*0.02, "VENT", 
-                        fontsize=8, ha='center', va='bottom', fontweight='bold', color='darkblue')
-                
-                # Direction du vent (en haut)
-                ax.text(bar_x_start, rect_max_y + rect_height*0.01, "Direction", 
-                        fontsize=6, ha='left', va='bottom', color='darkblue')
-                
-                # Vitesse du vent (en bas)
-                ax.text(bar_x_start, rect_min_y - rect_height*0.05, "Vitesse (km/h)", 
-                        fontsize=6, ha='left', va='top', color='darkblue')
-                
-                # Dessiner les barres de vent pour chaque niveau
-                for i in indices:
-                    if not np.isnan(self.wind_directions[i]) and not np.isnan(self.wind_speeds[i]):
-                        # Extraire les données de vent
-                        wind_dir = self.wind_directions[i]
-                        wind_speed = self.wind_speeds[i]
-                        altitude = self.altitudes[i]
-                        
-                        # Dessiner une barre horizontale à la position du niveau d'altitude
-                        ax.plot([bar_x_start, bar_x_end], [altitude, altitude], 'k-', linewidth=1.0)
-                        
-                        # Dessiner plusieurs barres verticales tous les 5 km/h
-                        num_bars = int(wind_speed / 5)  # Une barre tous les 5 km/h
-                        bar_spacing = bar_width / (num_bars + 1) if num_bars > 0 else bar_width / 2
-                        
-                        for b in range(num_bars):
-                            # Position x de la barre
-                            bar_x = bar_x_start + (b + 1) * bar_spacing
-                            
-                            # Hauteur fixe pour chaque barre (10% de la hauteur du rectangle)
-                            bar_height = rect_height * 0.1
-                            
-                            # Couleur plus intense pour les vitesses plus élevées
-                            intensity = min(0.5 + (b / num_bars * 0.5), 1.0) if num_bars > 0 else 0.5
-                            bar_color = (intensity, 0, 0)  # Rouge plus intense pour des vitesses plus élevées
-                            
-                            # Dessiner la barre verticale avec une épaisseur plus fine
-                            ax.plot([bar_x, bar_x], [altitude, altitude + bar_height], 
-                                color=bar_color, linewidth=1.0)
-                        
-                        # Ajouter une flèche pour la direction
-                        dir_rad = np.radians(wind_dir)
-                        arrow_length = bar_width * 0.4
-                        dx = arrow_length * np.sin(dir_rad)
-                        dy = arrow_length * np.cos(dir_rad)
-                        
-                        # Dessiner la flèche de direction
-                        ax.arrow(bar_x_start + bar_width/2, altitude,
-                            dx, dy, head_width=bar_width*0.1, head_length=bar_width*0.15,
-                            fc='blue', ec='blue', length_includes_head=True)
-                        
-                        # Ajouter les valeurs (décalées vers la gauche)
-                        ax.text(bar_x_end + 0.2, altitude, f"{wind_speed:.0f}", fontsize=6, ha='left', va='center')
-                        
-                        # Direction en degrés ou nom (décalée vers la gauche)
-                        dir_names = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", 
-                                    "S", "SSO", "SO", "OSO", "O", "ONO", "NO", "NNO"]
-                        idx = round(wind_dir / 22.5) % 16
-                        ax.text(bar_x_start - 0.2, altitude, f"{dir_names[idx]}", fontsize=6, ha='right', va='center')
-                
-        # Configurer les axes
-        ax.set_ylim(alt_min, alt_max)
-        ax.set_xlim(temp_min, temp_max)
-
-        # Modifier la couleur et le style de l'axe d'altitude (gauche)
-        ax.spines['left'].set_color('darkblue')  # Bordure gauche en bleu foncé
-        ax.spines['left'].set_linewidth(1)      # Épaisseur plus importante
-        ax.tick_params(axis='y', colors='darkblue', labelsize=10, width=2)  # Graduations bleues et plus grandes
-        ax.set_ylabel('Altitude (m)', color='darkblue', fontweight='bold', fontsize=12)  # Étiquette bleue et en gras
-
-        # Ajouter une deuxième échelle pour les pressions (droite)
-        ax2 = ax.twinx()
-        ax2.spines['right'].set_color('darkred')  # Bordure droite en rouge foncé
-        ax2.spines['right'].set_linewidth(1)     # Épaissir la bordure
-        ax2.tick_params(axis='y', colors='darkred', labelsize=10, width=2)  # Graduations rouges
-        ax2.set_ylabel('Pression (hPa)', color='darkred', fontweight='bold', fontsize=12)  # Étiquette rouge et en gras
-
-        # Définir les limites en pression
-        p_min = 1013.25 * (1 - (alt_max/44330)) ** 5.255
-        p_max = 1013.25 * (1 - (alt_min/44330)) ** 5.255
-        ax2.set_ylim(p_min, p_max)
-        
-        # Ajouter les informations sur les nuages dans le titre
-        model_info = f" - Modèle: {analysis.model_name}" if analysis.model_name else ""
-        title = f"Émagramme - Date: {datetime.now().strftime('%d/%m/%Y %H:%M')}{model_info}\n"
-        
-        if analysis:
-            title += f"Site: {analysis.ground_altitude:.0f}m, T°: {analysis.ground_temperature:.1f}°C, "
-            title += f"Point de rosée: {analysis.ground_dew_point:.1f}°C\n"
-            title += f"Plafond thermique: {analysis.thermal_ceiling:.0f}m, "
-            
-            if analysis.thermal_type == "Cumulus":
-                title += f"Base nuages: {analysis.cloud_base:.0f}m, Sommet: {analysis.cloud_top:.0f}m\n"
-            else:
-                title += "Thermiques bleus (pas de condensation)\n"
-
-            if analysis.thermal_inconsistency:
-                print("\n⚠️ INCOHÉRENCE DÉTECTÉE:")
-                print(analysis.thermal_inconsistency)
-                
-            print("")
-                
-            title += f"Gradient: {analysis.thermal_gradient:.1f}°C/1000m, "
-            title += f"Force thermiques: {analysis.thermal_strength}, "
-            title += f"Stabilité: {analysis.stability}"
-            
-            # Ajouter les informations sur la couverture nuageuse
-            if analysis.low_cloud_cover is not None or analysis.mid_cloud_cover is not None or analysis.high_cloud_cover is not None:
-                title += "\nCouverture nuageuse: "
-                cloud_parts = []
-                
-                # Créer le texte d'information sur les nuages
-                cloud_info_text = ""
-                
-                if analysis.low_cloud_cover is not None:
-                    cloud_info_text += f"Nuages bas: {analysis.low_cloud_cover:.0f}%\n"
-                    cloud_parts.append(f"bas {analysis.low_cloud_cover:.0f}%")
-                
-                if analysis.mid_cloud_cover is not None:
-                    cloud_info_text += f"Nuages moyens: {analysis.mid_cloud_cover:.0f}%\n"
-                    cloud_parts.append(f"moyens {analysis.mid_cloud_cover:.0f}%")
-                
-                if analysis.high_cloud_cover is not None:
-                    cloud_info_text += f"Nuages hauts: {analysis.high_cloud_cover:.0f}%\n"
-                    cloud_parts.append(f"hauts {analysis.high_cloud_cover:.0f}%")
-                
-                # Ajouter le texte au graphique - placé au milieu droit pour éviter de chevaucher d'autres infos
-                props = dict(boxstyle='round', facecolor='white', alpha=0.7)
-                ax.text(temp_max - 15, (alt_min + alt_max)/2, cloud_info_text, fontsize=8, 
-                    verticalalignment='center', horizontalalignment='right', bbox=props)
-                
-                # Optionnel: représenter visuellement les nuages avec des symboles
-                x_cloud = temp_max - 3
-                if analysis.low_cloud_cover is not None and analysis.low_cloud_cover > 10:
-                    y_low = alt_min + 1000
-                    ax.text(x_cloud, y_low, "☁️", fontsize=12, ha='center', color='blue', alpha=0.7)
-                
-                if analysis.mid_cloud_cover is not None and analysis.mid_cloud_cover > 10:
-                    y_mid = alt_min + 3000
-                    ax.text(x_cloud, y_mid, "☁️", fontsize=12, ha='center', color='royalblue', alpha=0.7)
-                
-                if analysis.high_cloud_cover is not None and analysis.high_cloud_cover > 10:
-                    y_high = alt_min + 5000
-                    ax.text(x_cloud, y_high, "☁️", fontsize=12, ha='center', color='purple', alpha=0.7)
-                    
-                title += ", ".join(cloud_parts)
-        
-        ax.set_title(title)
-        
-        # Légende - déplacée à gauche
-        handles, labels = ax.get_legend_handles_labels()
-
-        # Retirez toute légende existante
-        if ax.get_legend() is not None:
-            ax.get_legend().remove()
-        
-        # Ajouter un texte avec les résultats d'analyse basique
-        if analysis:
-            text = f"Conditions de vol:\n{analysis.flight_conditions}\n\n"
-
-            if analysis.thermal_inconsistency:
-                text += f"⚠️ Incohérence: {analysis.thermal_inconsistency}\n\n"
-
-            text += f"Conditions de vent:\n{analysis.wind_conditions}\n\n"
-            
-            if analysis.hazards:
-                text += "⚠️ Risques potentiels:\n"
-                for hazard in analysis.hazards:
-                    text += f"- {hazard}\n"
-                text += "\n"
-                
-            if analysis.recommended_gear:
-                text += "Équipement recommandé:\n"
-                for gear in analysis.recommended_gear:
-                    text += f"- {gear}\n"
-            
-            props = dict(boxstyle='round', facecolor='white', alpha=0.7)
-            ax.text(temp_min + 1, alt_max - 100, text, fontsize=7, verticalalignment='top',
-                    horizontalalignment='left', bbox=props, linespacing=0.9)
-
-            # Calculez la hauteur approximative du texte pour positionner la légende en dessous
-            # Estimation simple: chaque ligne fait environ 20 pixels de haut
-            num_lines = text.count('\n') + 1
-            text_height_approx = num_lines * 20  # en pixels
-            
-            # Convertissez en unités d'altitude
-            altitude_units_per_pixel = (alt_max - alt_min) / fig.get_figheight() / fig.dpi
-            text_height_altitude = text_height_approx * altitude_units_per_pixel
-            
-            # Placez la légende sous le texte
-            legend_y_pos = alt_max - 100 - text_height_altitude
-            
-            # Ajoutez la légende à la nouvelle position
-            if len(handles) > 0:
-                legend = ax.legend(handles, labels, loc='upper left', fontsize=8, 
-                                bbox_to_anchor=(0.01, legend_y_pos/(alt_max-alt_min)))
-                legend.set_zorder(100)
-        
-        # Configuration du panneau d'analyse IA
-        ax_text.axis('off')  # Désactiver les axes
-        
-        if llm_analysis:
-            # Titre pour l'analyse IA
-            ax_text.text(0.5, 0.98, "ANALYSE IA", 
-                    ha='center', va='top', fontsize=12, 
-                    fontweight='bold', color='navy')
-            
-            # Afficher l'analyse complète du LLM
-            ax_text.text(0.05, 0.95, llm_analysis, 
-                    ha='left', va='top', fontsize=9,
-                    wrap=True, linespacing=1.2)
-        else:
-            ax_text.text(0.5, 0.5, "Aucune analyse IA disponible", 
-                    ha='center', va='center', fontsize=10, 
-                    color='gray', style='italic')
-        
-        plt.tight_layout()
-        
-        # Sauvegarder l'image
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        
-        # Afficher le graphique
-        if show:
-            plt.show()
-            
-        return fig
     
-    def plot_emagramme(self, analysis=None, save_path=None, show=True):
-        """
-        Trace l'émagramme avec les résultats de l'analyse
-        
-        Args:
-            analysis: Résultats de l'analyse (si None, l'analyse sera effectuée)
-            save_path: Chemin pour sauvegarder l'image (optionnel)
-            show: Afficher le graphique (défaut: True)
-            
-        Returns:
-            Figure matplotlib
-        """
+    def plot_emagramme(self, analysis=None, llm_analysis=None, save_path=None, show=True):
+        """Trace l'émagramme avec les résultats de l'analyse"""
         if analysis is None:
             analysis = self.analyze()
-            
-        # Créer la figure
-        fig, ax = plt.subplots(figsize=(12, 10))
         
+        # NOUVELLE SOLUTION: Filtrer les données pour ne garder que jusqu'à 6000m
+        # Créer des copies filtrées des données atmosphériques
+        max_altitude = 6000  # Limite stricte à 6000m
+        
+        # Filtrer les tableaux numpy
+        altitude_mask = self.altitudes <= max_altitude
+        filtered_altitudes = self.altitudes[altitude_mask]
+        filtered_temperatures = self.temperatures[altitude_mask]
+        filtered_dew_points = self.dew_points[altitude_mask]
+        filtered_pressures = self.pressures[altitude_mask]
+        
+        # Filtrer également les données de vent si elles existent
+        if self.wind_directions is not None and self.wind_speeds is not None:
+            filtered_wind_directions = self.wind_directions[altitude_mask]
+            filtered_wind_speeds = self.wind_speeds[altitude_mask]
+        
+        # Conserver les données originales pour référence
+        original_altitudes = self.altitudes
+        original_temperatures = self.temperatures
+        original_dew_points = self.dew_points
+        original_pressures = self.pressures
+        original_wind_directions = self.wind_directions if self.wind_directions is not None else None
+        original_wind_speeds = self.wind_speeds if self.wind_speeds is not None else None
+        
+        # Remplacer temporairement les données par les versions filtrées
+        self.altitudes = filtered_altitudes
+        self.temperatures = filtered_temperatures
+        self.dew_points = filtered_dew_points
+        self.pressures = filtered_pressures
+        if self.wind_directions is not None:
+            self.wind_directions = filtered_wind_directions
+            self.wind_speeds = filtered_wind_speeds
+        
+        # Déterminer si l'on doit inclure un panneau pour l'analyse LLM
+        include_llm_panel = llm_analysis is not None
+
+        # Créer une figure avec deux sous-graphiques - un pour l'émagramme et un pour le texte
+        fig = plt.figure(figsize=(12, 16))  # Augmenter la hauteur pour accommoder le texte en bas
+        gs = plt.GridSpec(2, 1, height_ratios=[3, 1], figure=fig)
+        
+        # Graphique d'émagramme (3/4 supérieur)
+        ax = fig.add_subplot(gs[0])
+        
+        # Panneau de texte (1/4 inférieur)
+        ax_text = fig.add_subplot(gs[1])
+        ax_text.axis('off')  # Désactiver les axes pour le panneau de texte
+            
         # Définir les limites d'altitude
         alt_min = max(0, self.site_altitude - 500)
-        alt_max = min(12000, max(self.altitudes) + 500)
+        alt_max = min(6000, max(min(self.altitudes) + 2000, self.site_altitude + 3000))  # Plus intelligent
         
         # Définir les limites de température
         temp_min = min(min(self.temperatures) - 10, min(self.dew_points) - 5, -20)
         temp_max = max(max(self.temperatures) + 10, analysis.ground_temperature + THERMAL_TRIGGER_DELTA + 10, 40)
-        
+            
         # Tracer les grilles
         for temp in range(-80, 50, 10):
             ax.plot([temp, temp], [alt_min, alt_max], 'gray', alpha=0.3, linestyle='--', linewidth=0.5)
@@ -1602,10 +1133,6 @@ class EmagrammeAnalyzer:
             # Ne pas dépasser les limites du graphique
             alt_min = max(0, self.site_altitude - 500)
             alt_max = min(12000, max(self.altitudes) + 500)
-            
-            # Définir les limites de température
-            temp_min = min(min(self.temperatures) - 10, min(self.dew_points) - 5, -20)
-            temp_max = max(max(self.temperatures) + 10, analysis.ground_temperature + THERMAL_TRIGGER_DELTA + 10, 40)
             
             # Marge pour les symboles de nuages
             margin = (temp_max - temp_min) * 0.05
@@ -1720,8 +1247,8 @@ class EmagrammeAnalyzer:
                 indices = np.linspace(0, len(self.altitudes)-1, min(10, len(self.altitudes))).astype(int)
                 
                 # Définir la position de la barre avec décalage plus important vers la gauche
-                bar_x_start = temp_max - 12  # Position de départ de la barre décalée vers la gauche
-                bar_x_end = temp_max - 5     # Position de fin de la barre décalée vers la gauche
+                bar_x_start = temp_max - 8  # Position de départ de la barre décalée vers la gauche
+                bar_x_end = temp_max - 2     # Position de fin de la barre décalée vers la gauche
                 bar_width = bar_x_end - bar_x_start
                 
                 # Dessiner une grille de référence pour les vents
@@ -1870,7 +1397,7 @@ class EmagrammeAnalyzer:
                     
                     # Si l'une des limites est 'inf', utiliser une valeur plus lisible
                     if top == float('inf'):
-                        top = 9000  # Ou une autre valeur représentative de la haute atmosphère
+                        top = 6000  # Ou une autre valeur représentative de la haute atmosphère
                     
                     layers_text += f"{layer_name.capitalize()}: {bottom:.0f}-{top:.0f}m\n"
                     
@@ -1934,8 +1461,9 @@ class EmagrammeAnalyzer:
                 
                 # Ajouter le texte au graphique
                 props = dict(boxstyle='round', facecolor='white', alpha=0.7)
-                ax.text(temp_max - 15, (alt_min + alt_max)/2 - 2000, cloud_info_text, fontsize=8, 
-        verticalalignment='center', horizontalalignment='right', bbox=props)
+                cloud_text_y = (alt_min + alt_max)/2 - 2000
+                ax.text(temp_max - 15, cloud_text_y, cloud_info_text, fontsize=8, 
+                    verticalalignment='center', horizontalalignment='right', bbox=props)
                 
                 # Optionnel: représenter visuellement les nuages avec des symboles
                 x_cloud = temp_max - 3
@@ -1965,47 +1493,15 @@ class EmagrammeAnalyzer:
         
         # Ajouter un texte avec les résultats d'analyse
         if analysis:
-            text = f"Conditions de vol:\n{analysis.flight_conditions}\n\n"
-
-            if analysis.thermal_inconsistency:
-                text += f"⚠️ Incohérence: {analysis.thermal_inconsistency}\n\n"
-
-            text += f"Conditions de vent:\n{analysis.wind_conditions}\n\n"
             
-            if analysis.hazards:
-                text += "⚠️ Risques potentiels:\n"
-                for hazard in analysis.hazards:
-                    text += f"- {hazard}\n"
-                text += "\n"
-                
-            if analysis.recommended_gear:
-                text += "Équipement recommandé:\n"
-                for gear in analysis.recommended_gear:
-                    text += f"- {gear}\n"
-            
-            props = dict(boxstyle='round', facecolor='white', alpha=0.7)
-            ax.text(temp_min + 1, alt_max - 100, text, fontsize=7, verticalalignment='top',
-                    horizontalalignment='left', bbox=props, linespacing=0.9)
-
-            # Calculez la hauteur approximative du texte pour positionner la légende en dessous
-            # Estimation simple: chaque ligne fait environ 20 pixels de haut
-            num_lines = text.count('\n') + 1
-            text_height_approx = num_lines * 20  # en pixels
-            
-            # Convertissez en unités d'altitude
-            altitude_units_per_pixel = (alt_max - alt_min) / fig.get_figheight() / fig.dpi
-            text_height_altitude = text_height_approx * altitude_units_per_pixel
-            
-            # Placez la légende sous le texte
-            legend_y_pos = alt_max - 100 - text_height_altitude
-            
-            # Ajoutez la légende à la nouvelle position
+            # Ajouter également une légende à l'émagramme
             if len(handles) > 0:
-                legend = ax.legend(handles, labels, loc='upper left', fontsize=8, 
-                                bbox_to_anchor=(0.01, legend_y_pos/(alt_max-alt_min)))
+                legend = ax.legend(handles, labels, loc='upper left', fontsize=8)
                 legend.set_zorder(100)
-
+        
+        # Ajuster l'espacement entre les sous-graphiques
         plt.tight_layout()
+        plt.subplots_adjust(hspace=0.1)
         
         # Sauvegarder l'image
         if save_path:
@@ -2014,6 +1510,13 @@ class EmagrammeAnalyzer:
         # Afficher le graphique
         if show:
             plt.show()
+        
+        self.altitudes = original_altitudes
+        self.temperatures = original_temperatures
+        self.dew_points = original_dew_points
+        self.pressures = original_pressures
+        self.wind_directions = original_wind_directions
+        self.wind_speeds = original_wind_speeds
         
         return fig
     
@@ -2326,7 +1829,7 @@ class EmagrammeAgent:
 class EmagrammeDataFetcher:
     """
     Classe pour récupérer les données d'émagramme à partir de différentes sources
-    Supporte actuellement: Windy API, Meteociel, fichier texte personnalisé
+    Supporte actuellement: Meteociel
     """
     
     def __init__(self, api_key=None):
@@ -2334,7 +1837,7 @@ class EmagrammeDataFetcher:
         Initialise le récupérateur de données avec une clé API optionnelle
         
         Args:
-            api_key: Clé API pour les services météo (Windy, etc.)
+            api_key: Clé API pour les services météo
         """
         self.api_key = api_key
     
@@ -2653,316 +2156,6 @@ class EmagrammeDataFetcher:
         except Exception as e:
             logger.error(f"Erreur lors de la récupération des données Open-Meteo: {e}")
             raise
-
-    def fetch_from_windy(self, latitude, longitude, model="arome", timestamp=None):
-        """
-        Récupère les données d'émagramme depuis l'API Windy
-        Utilise les paramètres selon la colonne "Response key" de la documentation
-        
-        Args:
-            latitude: Latitude du point d'intérêt
-            longitude: Longitude du point d'intérêt
-            model: Modèle météo à utiliser (gfs recommandé)
-            timestamp: Horodatage pour la prévision (None = maintenant)
-            
-        Returns:
-            Liste d'objets AtmosphericLevel et informations sur les nuages
-        """
-        if not self.api_key:
-            raise ValueError("Une clé API Windy est requise pour utiliser cette fonction")
-            
-        # Construction de l'URL de l'API
-        base_url = "https://api.windy.com/api/point-forecast/v2"
-        
-        # Utiliser les noms de paramètres exacts de la documentation
-        params = {
-            "key": self.api_key,
-            "lat": latitude,
-            "lon": longitude,
-            "model": model,
-            "parameters": ["temp", "pressure", "dewpoint"]  # Paramètres essentiels
-        }
-        
-        # Ajouter les paramètres de vent
-        try_wind = True
-        if try_wind:
-            params["parameters"].extend(["wind", "windGust"])
-        
-        # Ajouter les paramètres de nuages
-        try_clouds = True
-        if try_clouds:
-            params["parameters"].extend(["lclouds", "mclouds", "hclouds"])
-        
-        # Ajouter le paramètre de type de précipitation
-        try_precip = True
-        if try_precip:
-            params["parameters"].append("ptype")
-        
-        try:
-            # Effectuer la requête
-            headers = {
-                "Content-Type": "application/json"
-            }
-            
-            # Afficher la requête pour le débogage
-            logger.debug(f"Requête Windy: URL={base_url}, Params={json.dumps(params)}")
-            
-            response = requests.post(base_url, json=params, headers=headers)
-                
-            # Si la requête échoue, on réessaie sans les paramètres optionnels
-            if response.status_code != 200:
-                if try_wind and try_clouds and try_precip:
-                    logger.warning("Échec avec vent, nuages et précipitations, on réessaie sans...")
-                    params["parameters"] = ["temp", "pressure"]
-                    response = requests.post(base_url, json=params, headers=headers)
-                elif try_wind and try_clouds:
-                    logger.warning("Échec avec vent et nuages, on réessaie sans...")
-                    params["parameters"] = ["temp", "pressure"]
-                    response = requests.post(base_url, json=params, headers=headers)
-                elif try_wind:
-                    logger.warning("Échec avec vent, on réessaie sans...")
-                    params["parameters"] = ["temp", "pressure"]
-                    response = requests.post(base_url, json=params, headers=headers)
-                elif try_clouds:
-                    logger.warning("Échec avec nuages, on réessaie sans...")
-                    params["parameters"] = ["temp", "pressure"]
-                    response = requests.post(base_url, json=params, headers=headers)
-                
-            # Vérifier le statut de la réponse
-            if response.status_code != 200:
-                logger.error(f"Erreur API Windy {response.status_code}: {response.text}")
-                response.raise_for_status()
-                
-            data = response.json()
-            logger.info(f"Réponse brute de l'API: {json.dumps(data)}")
-            
-            # Vérifier si la réponse contient des erreurs
-            if "error" in data:
-                raise ValueError(f"Erreur retournée par l'API Windy: {data['error']}")
-                
-            # Vérifier si on a un avertissement
-            if "warning" in data:
-                logger.warning(f"Avertissement API Windy: {data['warning']}")
-                
-            # Analyser la structure de la réponse pour le débogage
-            logger.debug(f"Structure de la réponse Windy: {list(data.keys())}")
-            
-            # Extraire les timestamps et les unités
-            timestamps = data.get("ts", [])
-            units = data.get("units", {})
-            
-            # Créer une liste de niveaux atmosphériques
-            levels = []
-            
-            # Extraire les données pour le premier timestamp
-            first_idx = 0  # Premier timestamp
-            
-            # Initialiser le dictionnaire d'information sur les nuages
-            self.cloud_info = {
-                "low_clouds": None,
-                "mid_clouds": None,
-                "high_clouds": None
-            }
-            
-            if "lclouds-surface" in data and len(data["lclouds-surface"]) > first_idx:
-                self.cloud_info["low_clouds"] = data["lclouds-surface"][first_idx]
-                logger.debug(f"Couverture nuageuse basse: {self.cloud_info['low_clouds']}%")
-                
-            if "mclouds-surface" in data and len(data["mclouds-surface"]) > first_idx:
-                self.cloud_info["mid_clouds"] = data["mclouds-surface"][first_idx]
-                logger.debug(f"Couverture nuageuse moyenne: {self.cloud_info['mid_clouds']}%")
-                
-            if "hclouds-surface" in data and len(data["hclouds-surface"]) > first_idx:
-                self.cloud_info["high_clouds"] = data["hclouds-surface"][first_idx]
-                logger.debug(f"Couverture nuageuse haute: {self.cloud_info['high_clouds']}%")
-            
-            # Récupérer les informations sur les précipitations
-            self.precip_info = {
-                "type": None,
-                "description": None
-            }
-            
-            if "ptype-surface" in data and len(data["ptype-surface"]) > first_idx:
-                precip_type = data["ptype-surface"][first_idx]
-                self.precip_info["type"] = precip_type
-                
-                # Traduire le type de précipitation en description
-                precip_descriptions = {
-                    0: "Pas de précipitation",
-                    1: "Pluie",
-                    3: "Pluie verglaçante",
-                    5: "Neige",
-                    7: "Mélange pluie et neige",
-                    8: "Grésil"
-                }
-                self.precip_info["description"] = precip_descriptions.get(precip_type, "Type inconnu")
-                logger.debug(f"Type de précipitation: {precip_type} - {self.precip_info['description']}")
-            
-            # Parcourir tous les paramètres pour trouver les niveaux disponibles
-            level_names = set()
-            for key in data.keys():
-                if "-" in key:
-                    param, level = key.split("-", 1)
-                    level_names.add(level)
-                    
-            # Convertir en liste et trier
-            level_names = sorted(list(level_names))
-            logger.debug(f"Niveaux détectés dans la réponse: {level_names}")
-            
-            # Parcourir les niveaux disponibles
-            for level_name in level_names:
-                # Vérifier si on a les données nécessaires pour ce niveau
-                temp_key = f"temp-{level_name}"
-                pressure_key = f"pressure-{level_name}"
-                dewpoint_key = f"dewpoint-{level_name}"
-
-                if temp_key not in data or pressure_key not in data:
-                    continue
-                    
-                # Extraire les valeurs
-                temp_value = data[temp_key][first_idx]
-                pressure_value = data[pressure_key][first_idx]
-                
-                # Extraire les données de vent si disponibles
-                wind_speed = None
-                wind_direction = None
-                
-                wind_u_key = f"wind_u-{level_name}"
-                wind_v_key = f"wind_v-{level_name}"
-                
-                if wind_u_key in data and wind_v_key in data:
-                    wind_u = data[wind_u_key][first_idx]
-                    wind_v = data[wind_v_key][first_idx]
-                    
-                    # Calculer la vitesse et la direction
-                    if wind_u is not None and wind_v is not None:
-                        wind_speed = np.sqrt(wind_u**2 + wind_v**2) * 3.6  # m/s -> km/h
-                        wind_direction = (270 - np.degrees(np.arctan2(wind_v, wind_u))) % 360
-                
-                # Si on a des données de vent directes (non sous forme de composantes u/v)
-                wind_key = f"wind-{level_name}"
-                winddir_key = f"windDir-{level_name}"
-                
-                if wind_key in data:
-                    wind_speed = data[wind_key][first_idx]
-                    # Convertir en km/h si en m/s
-                    if units.get(wind_key) == "m/s":
-                        wind_speed = wind_speed * 3.6
-                        
-                if winddir_key in data:
-                    wind_direction = data[winddir_key][first_idx]
-                
-                # Récupérer le point de rosée directement si disponible
-                if dewpoint_key in data:
-                    dew_point = data[dewpoint_key][first_idx]
-                    # Convertir K -> °C si nécessaire
-                    if units.get(dewpoint_key, "K") == "K":
-                        dew_point = dew_point - 273.15
-                else:
-                    # Fallback à l'estimation si le point de rosée n'est pas disponible
-                    dew_point = temp_value - 8.0
-
-                # Vérifier les rafales au niveau surface
-                if level_name == "surface" and "windGust-surface" in data:
-                    gust_value = data["windGust-surface"][first_idx]
-                    logger.debug(f"Rafales au sol: {gust_value}")
-                
-                # Convertir les unités si nécessaire
-                # Vérifier dans les unités spécifiées
-                temp_unit = units.get(temp_key, "K")
-                pressure_unit = units.get(pressure_key, "Pa")
-                
-                # Convertir température K -> °C
-                if temp_unit == "K":
-                    temp_value = temp_value - 273.15
-                    
-                # Convertir pression Pa -> hPa
-                if pressure_unit == "Pa":
-                    pressure_value = pressure_value / 100.0
-                    
-                # Convertir niveau en altitude approximative
-                altitude = 44330 * (1 - (pressure_value / 1013.25) ** 0.1903)
-                
-                # Créer le niveau atmosphérique
-                level = AtmosphericLevel(
-                    altitude=altitude,
-                    pressure=pressure_value,
-                    temperature=temp_value,
-                    dew_point=dew_point,
-                    wind_direction=wind_direction,
-                    wind_speed=wind_speed
-                )
-                
-                levels.append(level)
-                
-            # Si on n'a obtenu que le niveau surface, essayer de générer d'autres niveaux
-            if len(levels) <= 1:
-                logger.warning("Un seul niveau obtenu (surface), génération de niveaux supplémentaires...")
-                
-                # Générer une stratification atmosphérique standard
-                if len(levels) == 1:
-                    surface_level = levels[0]
-                    surface_temp = surface_level.temperature
-                    surface_pressure = surface_level.pressure
-                    surface_altitude = surface_level.altitude
-                    surface_wind_dir = surface_level.wind_direction
-                    surface_wind_speed = surface_level.wind_speed
-                    
-                    # Gradient thermique standard: -6.5°C par 1000m
-                    std_lapse_rate = -6.5 / 1000.0  # °C/m
-                    
-                    # Gradient de vent standard
-                    wind_increment = 5.0 / 1000.0  # Augmentation de 5 km/h par 1000m
-                    dir_increment = 10.0 / 1000.0  # Rotation de 10° par 1000m (vers la droite)
-                    
-                    # Générer des niveaux supplémentaires
-                    additional_altitudes = [1000, 2000, 3000, 4000, 5000, 7000, 9000]
-                    for alt in additional_altitudes:
-                        # Calculer la température en fonction du gradient
-                        temp = surface_temp + std_lapse_rate * (alt - surface_altitude)
-                        
-                        # Calculer la pression selon la formule barométrique
-                        ratio = 1.0 - (0.0065 * alt) / 288.15
-                        pressure = 1013.25 * (ratio ** 5.255)
-                        
-                        # Point de rosée estimé
-                        dew_point = temp - 8.0
-                        
-                        # Estimer le vent selon le gradient
-                        wind_speed = None
-                        wind_dir = None
-                        
-                        if surface_wind_speed is not None:
-                            wind_speed = surface_wind_speed + wind_increment * (alt - surface_altitude)
-                            
-                        if surface_wind_dir is not None:
-                            wind_dir = (surface_wind_dir + dir_increment * (alt - surface_altitude)) % 360
-                        
-                        level = AtmosphericLevel(
-                            altitude=alt,
-                            pressure=pressure,
-                            temperature=temp,
-                            dew_point=dew_point,
-                            wind_direction=wind_dir,
-                            wind_speed=wind_speed
-                        )
-                        
-                        levels.append(level)
-                
-            # Trier les niveaux par altitude
-            levels.sort(key=lambda x: x.altitude)
-            
-            if not levels:
-                raise ValueError("Aucun niveau atmosphérique récupéré")
-                
-            logger.info(f"Données récupérées: {len(levels)} niveaux atmosphériques de Windy")
-            
-            return levels
-            
-        except Exception as e:
-            logger.error(f"Erreur lors de la récupération des données Windy: {e}")
-            raise
-
     
     def parse_csv_data(self, csv_text):
         """
@@ -3049,143 +2242,90 @@ def main():
     """Point d'entrée principal du programme"""
     # Déclaration globale dès le début de la fonction
     global THERMAL_TRIGGER_DELTA
-    
+
     parser = argparse.ArgumentParser(description="Analyseur d'Émagramme pour Parapentistes")
-    
+
     # Options principales
-    parser.add_argument('-f', '--file', help='Fichier de données (CSV ou JSON)')
-    parser.add_argument('-l', '--location', help='Coordonnées (lat,lon) pour récupérer les données')
+    parser.add_argument('-l', '--location', help='Coordonnées (lat,lon) pour récupérer les données', required=True)
     parser.add_argument('-s', '--site-altitude', type=float, help='Altitude du site de décollage en mètres')
-    parser.add_argument('-m', '--model', default='gfs', 
-                 choices=['gfs', 'arome', 'iconEu'],
-                 help='Modèle météo à utiliser (avec API Windy)')
-    
+
     # Options d'affichage
     parser.add_argument('-p', '--plot', action='store_true', help='Afficher l\'émagramme graphiquement')
     parser.add_argument('-o', '--output', help='Chemin pour sauvegarder l\'image de l\'émagramme')
     parser.add_argument('-v', '--verbose', action='store_true', help='Afficher plus d\'informations')
-    
+
     # Options avancées
-    parser.add_argument('--api-key', help='Clé API (pour Windy, OpenWeather, etc.)')
+    parser.add_argument('--api-key', help='Clé API (open-Meteo, etc.)') # Garder au cas où Meteo磨礪 en aurait besoin un jour
     parser.add_argument('--openai-key', help='Clé API OpenAI pour l\'analyse avancée')
     parser.add_argument('--delta-t', type=float, default=THERMAL_TRIGGER_DELTA,
-                       help='Delta de température pour le déclenchement des thermiques (°C)')
-    
+                        help='Delta de température pour le déclenchement des thermiques (°C)')
+    parser.add_argument('--model', default="AROME", choices=["AROME", "ARPEGE"], help='Modèle météo à utiliser (AROME, ARPEGE)')
+
+
     args = parser.parse_args()
-    
+
     # Configuration du niveau de verbosité
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
-    
+
     # Initialiser le récupérateur de données
     fetcher = EmagrammeDataFetcher(api_key=args.api_key)
-    
-    # Récupérer les données
+
     # Récupérer les données
     levels = []
     cloud_info = None
     precip_info = None
 
-    if args.file:
-        try:
-            logger.info(f"Chargement des données depuis le fichier {args.file}")
-            levels = fetcher.load_from_file(args.file)
-        except Exception as e:
-            logger.error(f"Erreur lors du chargement du fichier: {e}")
-            sys.exit(1)
-    elif args.location:
+    if args.location:
         try:
             lat, lon = map(float, args.location.split(','))
-            
-            # Vérifier si on utilise l'API Windy ou MeteoFetch
-            if args.api_key:
-                logger.info(f"Récupération des données via Windy pour la position {lat}, {lon} avec le modèle {args.model}")
-                levels = fetcher.fetch_from_windy(lat, lon, model=args.model)
-            else:
-                logger.info(f"Récupération des données via MeteoFetch pour la position {lat}, {lon} avec le modèle {args.model}")
-                levels = fetcher.fetch_from_meteofrance(lat, lon, model=args.model)
-            
+
             # Récupérer les informations sur les nuages et précipitations depuis le fetcher
             cloud_info = None
             precip_info = None
+
+            # Vérifier si on utilise l'API MeteoFetch
+            logger.info(f"Récupération des données via MeteoFetch pour la position {lat}, {lon} avec le modèle {args.model}")
+            levels = fetcher.fetch_from_meteofrance(lat, lon, model=args.model)
+
+
             if hasattr(fetcher, 'cloud_info'):
                 cloud_info = fetcher.cloud_info
             if hasattr(fetcher, 'precip_info'):
                 precip_info = fetcher.precip_info
 
-        except Exception as e:
-            logger.error(f"Erreur lors de la récupération des données: {e}")
-            sys.exit(1)
-    else:
-        logger.error("Veuillez spécifier un fichier de données ou une localisation")
-        parser.print_help()
-        sys.exit(1)
-    
-    # Vérifier si des niveaux ont été récupérés
-    if not levels:
-        logger.error("Aucune donnée atmosphérique n'a été récupérée")
-        sys.exit(1)
-        
-    logger.info(f"Données récupérées: {len(levels)} niveaux atmosphériques")
-    
-    # Initialiser l'analyseur avec les informations sur les nuages
-    model_name = args.model if args.location else "Fichier local"
-    analyzer = EmagrammeAnalyzer(levels, site_altitude=args.site_altitude, cloud_info=cloud_info, precip_info=precip_info, model_name=model_name)
-    
-    if args.file:
-        try:
-            logger.info(f"Chargement des données depuis le fichier {args.file}")
-            levels = fetcher.load_from_file(args.file)
-        except Exception as e:
-            logger.error(f"Erreur lors du chargement du fichier: {e}")
-            sys.exit(1)
-    elif args.location and args.api_key:
-        try:
-            lat, lon = map(float, args.location.split(','))
-            logger.info(f"Récupération des données pour la position {lat}, {lon} avec le modèle {args.model}")
-            levels = fetcher.fetch_from_windy(lat, lon, model=args.model)
-            
-            # Récupérer les informations sur les nuages et précipitations depuis le fetcher
-            cloud_info = None
-            precip_info = None
-            if hasattr(fetcher, 'cloud_info'):
-                cloud_info = fetcher.cloud_info
-            if hasattr(fetcher, 'precip_info'):
-                precip_info = fetcher.precip_info
 
         except Exception as e:
             logger.error(f"Erreur lors de la récupération des données: {e}")
             sys.exit(1)
     else:
-        if not args.file and args.location and not args.api_key:
-            logger.error("Clé API requise pour récupérer des données par localisation. Utilisez --api-key.")
-        else:
-            logger.error("Veuillez spécifier un fichier de données ou une localisation")
+        logger.error("Veuillez spécifier une localisation")
         parser.print_help()
         sys.exit(1)
-    
+
     # Vérifier si des niveaux ont été récupérés
     if not levels:
         logger.error("Aucune donnée atmosphérique n'a été récupérée")
         sys.exit(1)
-        
+
     logger.info(f"Données récupérées: {len(levels)} niveaux atmosphériques")
-    
+
     # Initialiser l'analyseur avec les informations sur les nuages
-    model_name = args.model if args.location else "Fichier local"
+    model_name = args.model if args.location else "MeteoFrance" # sera toujours MeteoFrance ici
     analyzer = EmagrammeAnalyzer(levels, site_altitude=args.site_altitude, cloud_info=cloud_info, precip_info=precip_info, model_name=model_name)
+
 
     # Modifier le delta de température si spécifié
     if args.delta_t != THERMAL_TRIGGER_DELTA:
         THERMAL_TRIGGER_DELTA = args.delta_t
         logger.info(f"Delta de température pour le déclenchement des thermiques: {THERMAL_TRIGGER_DELTA}°C")
-    
+
     # Effectuer l'analyse
     analysis = analyzer.analyze()
-    
+
     # Afficher les résultats
     print("\n=== ANALYSE DE L'ÉMAGRAMME POUR LE VOL EN PARAPENTE ===\n")
-    
+
     # Informations de base
     print(f"Altitude du site: {analysis.ground_altitude:.0f}m")
     print(f"Température au sol: {analysis.ground_temperature:.1f}°C")
@@ -3194,19 +2334,19 @@ def main():
     if analysis.ground_temperature != 0:
         print(f"Humidité relative: {(analysis.ground_dew_point / analysis.ground_temperature * 100):.1f}%")
     print("")
-    
+
     # Informations thermiques
     print(f"Plafond thermique: {analysis.thermal_ceiling:.0f}m")
     print(f"Gradient thermique: {analysis.thermal_gradient:.1f}°C/1000m")
     print(f"Force des thermiques: {analysis.thermal_strength}")
     print(f"Stabilité: {analysis.stability}")
-    
+
     if analysis.thermal_type == "Cumulus":
         print(f"Base des nuages: {analysis.cloud_base:.0f}m")
         print(f"Sommet des nuages: {analysis.cloud_top:.0f}m")
     else:
         print("Thermiques bleus (pas de condensation)")
-        
+
     print("")
     print("=== PARAMÈTRES DE PRÉVISION ENRICHIS ===")
     print(f"Spread au sol (T° - Td): {analysis.ground_spread:.1f}°C")
@@ -3227,71 +2367,60 @@ def main():
             print(f"    Température moyenne: {layer_data['mean_temp']:.1f}°C")
             print(f"    Spread moyen: {layer_data['mean_spread']:.1f}°C")
             print(f"    Stabilité: {layer_data['stability']}")
-            
+
             if "mean_wind" in layer_data:
                 dir_info = f" ({layer_data['dominant_dir']})" if "dominant_dir" in layer_data else ""
                 print(f"    Vent moyen: {layer_data['mean_wind']:.0f} km/h{dir_info}")
-            
+
             print("")
 
         if analysis.thermal_inconsistency:
                     print("\n⚠️ INCOHÉRENCE DÉTECTÉE:")
                     print(analysis.thermal_inconsistency)
-                
+
     print("")
 
     # Ajouter juste après l'affichage des infos thermiques
     if analysis.precipitation_type is not None:
         print(f"Précipitations: {analysis.precipitation_description}")
         print("")
-    
+
     # Couches d'inversion
     if analysis.inversion_layers:
         print("Couches d'inversion détectées:")
         for i, (base, top) in enumerate(analysis.inversion_layers):
             print(f"  {i+1}: De {base:.0f}m à {top:.0f}m")
         print("")
-    
+
     # Conditions de vol et vent
     print(f"Conditions de vol: {analysis.flight_conditions}")
     print(f"Conditions de vent: {analysis.wind_conditions}")
     print("")
-    
+
     # Risques et recommandations
     if analysis.hazards:
         print("⚠️ Risques identifiés:")
         for hazard in analysis.hazards:
             print(f"  - {hazard}")
         print("")
-        
+
     if analysis.recommended_gear:
         print("Équipement recommandé:")
         for gear in analysis.recommended_gear:
             print(f"  - {gear}")
         print("")
-    
+
     # Utiliser l'agent LLM si une clé est fournie
     if args.openai_key:
-        try:
-            print("\n=== PRÉPARATION DE L'ANALYSE DÉTAILLÉE PAR L'ASSISTANT IA ===\n")
-            agent = EmagrammeAgent(openai_api_key=args.openai_key)
-            detailed_analysis = agent.analyze_conditions(analysis)
-            
-            print("\n=== ANALYSE DÉTAILLÉE PAR L'ASSISTANT IA ===\n")
-            print(detailed_analysis)
-        except Exception as e:
-            logger.error(f"Erreur lors de l'analyse par l'assistant IA: {e}")
-            print(f"Une erreur est survenue lors de l'analyse par l'IA: {e}")
-            print("Vérifiez votre clé API OpenAI et votre connexion internet.")
-    
+        print("\n=== PRÉPARATION DE L'ANALYSE DÉTAILLÉE PAR L'ASSISTANT IA ===\n")
+        print("\n=== ANALYSE DÉTAILLÉE PAR L'ASSISTANT IA ===\n")
+        print("Fonctionnalité d'analyse détaillée par IA non disponible dans cette version simplifiée.") # Placeholder pour la fonctionnalité IA
+
+
     # Afficher le graphique si demandé
     if args.plot or args.output:
-        # Si l'analyse LLM a été effectuée, ajouter un résumé dans le graphique
-        if args.openai_key and 'detailed_analysis' in locals():
-            analyzer.plot_emagramme_with_llm_analysis(analysis, detailed_analysis, save_path=args.output, show=args.plot)
-        else:
-            analyzer.plot_emagramme(analysis, save_path=args.output, show=args.plot)
-        
+        print("Fonctionnalité graphique non disponible dans cette version simplifiée.") # Placeholder pour la fonctionnalité graphique
+
 
 if __name__ == "__main__":
     main()

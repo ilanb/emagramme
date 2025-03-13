@@ -84,29 +84,12 @@ help_texts = {
     
     "subsidence": "Mouvement descendant de l'air à grande échelle, souvent associé aux anticyclones. La subsidence comprime et réchauffe l'air, créant souvent des inversions qui limitent le développement vertical des thermiques."
 }
-
-# Fonction pour ajouter une aide contextuelle dans l'interface
-def add_help_section(key):
-    """Ajoute une section d'aide expansible pour un concept spécifique"""
-    with st.expander(f"En savoir plus sur {key.replace('_', ' ')}"):
-        st.markdown(help_texts[key])
-        
-        # Ajouter des informations supplémentaires pour certains concepts
-        if key == "emagramme":
-            st.image("https://www.meteofrance.fr/sites/meteofrance.fr/files/images/s09_peda_sc_emagramme2_1_0.png", 
-                    caption="Exemple d'émagramme et ses principales composantes")
-        elif key == "thermique":
-            st.image("https://www.meteo-parapente.com/metimages/principe-thermique.png", 
-                    caption="Formation et structure d'un thermique")
-            
+           
 # Fonction pour afficher l'émagramme dans Streamlit
 def display_emagramme(analyzer, analysis, llm_analysis=None):
     """Affiche l'émagramme et les résultats de l'analyse dans Streamlit"""
-    if llm_analysis:
-        fig = analyzer.plot_emagramme_with_llm_analysis(analysis, llm_analysis, show=False)
-    else:
-        fig = analyzer.plot_emagramme(analysis, show=False)
-    
+    # Utilise la nouvelle fonction fusionnée qui gère l'analyse IA en option
+    fig = analyzer.plot_emagramme(analysis=analysis, llm_analysis=llm_analysis, show=False)
     st.pyplot(fig)
 
 def calculate_convective_layer_thickness(analyzer, analysis):
@@ -135,6 +118,67 @@ def calculate_convective_layer_thickness(analyzer, analysis):
         "thermal_ceiling": thermal_ceiling
     }
 
+def create_convective_layer_plot(analysis, inversions=None):
+    """Crée un graphique pour visualiser la couche convective"""
+    ground_alt = analysis.ground_altitude
+    thermal_ceiling = analysis.thermal_ceiling
+    anabatic_zone_top = min(ground_alt + 500, thermal_ceiling)
+    
+    # Créer le graphique
+    fig, ax = plt.subplots(figsize=(4, 6))
+    
+    # Zone convective complète (en vert clair avec plus de transparence)
+    ax.axhspan(ground_alt, thermal_ceiling, alpha=0.1, color='green', 
+            label="Couche convective")
+    
+    # Zone anabatique (premiers 500m au-dessus du sol)
+    ax.axhspan(ground_alt, anabatic_zone_top, alpha=0.1, color='blue', 
+            label="Zone anabatique")
+    
+    # Ajout de lignes horizontales pour marquer les altitudes clés
+    ax.axhline(y=ground_alt, color='brown', linestyle='-', linewidth=1.5)
+    ax.axhline(y=thermal_ceiling, color='purple', linestyle='--', linewidth=1.5)
+    ax.axhline(y=anabatic_zone_top, color='blue', linestyle='--', linewidth=1)
+    
+    # Ajout d'annotations pour les altitudes
+    ax.text(0.05, ground_alt + 50, f"Sol: {ground_alt:.0f}m", 
+            fontsize=8, ha='left', va='bottom')
+    ax.text(0.05, thermal_ceiling - 50, f"Plafond: {thermal_ceiling:.0f}m", 
+            fontsize=8, ha='left', va='top')
+    ax.text(0.05, anabatic_zone_top - 20, f"Limite anabatique: {anabatic_zone_top:.0f}m", 
+            fontsize=8, ha='left', va='top', color='blue')
+    
+    # Ajouter une information sur l'épaisseur de la couche
+    thickness = thermal_ceiling - ground_alt
+    ax.text(0.5, (ground_alt + thermal_ceiling) / 2, 
+            f"Épaisseur: {thickness:.0f}m", 
+            fontsize=9, ha='center', va='center', 
+            bbox=dict(facecolor='white', alpha=0.7, boxstyle='round'))
+    
+    # Si des inversions sont présentes, les ajouter au graphique
+    if inversions:
+        for i, (base, top) in enumerate(inversions):
+            if base < thermal_ceiling + 500:  # Ne montrer que les inversions pertinentes
+                ax.axhspan(base, top, alpha=0.15, color='red', 
+                        label=f"Inversion {i+1}" if i == 0 else "")
+                ax.text(0.05, (base + top) / 2, f"Inv. {i+1}: {base:.0f}-{top:.0f}m", 
+                        fontsize=8, ha='left', va='center', color='darkred')
+    
+    # Configuration des axes
+    ax.set_ylim(max(0, ground_alt - 200), thermal_ceiling + 500)
+    ax.set_xlim(0, 1)
+    ax.set_ylabel("Altitude (m)")
+    ax.set_xticks([])  # Supprimer les graduations de l'axe X
+    
+    # Ajouter un titre au graphique
+    ax.set_title("Structure verticale de l'atmosphère", fontsize=10)
+    
+    # Ajouter une légende
+    ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.05), 
+            fancybox=True, shadow=True, ncol=2, fontsize=8)
+    
+    return fig
+
 # Fonction pour obtenir et analyser les données
 def fetch_and_analyze(lat, lon, model, site_altitude, api_key=None, openai_key=None, delta_t=THERMAL_TRIGGER_DELTA, 
                      data_source="open-meteo"):
@@ -160,27 +204,6 @@ def fetch_and_analyze(lat, lon, model, site_altitude, api_key=None, openai_key=N
                     levels = fetcher.fetch_from_openmeteo(lat, lon, model=model)
                 except Exception as e:
                     st.error(f"Erreur avec Open-Meteo: {str(e)}")
-                    
-                    # Si on dispose d'une clé API Windy, essayer avec Windy
-                    if api_key:
-                        st.warning("Tentative avec l'API Windy...")
-                        # Mapper le modèle Open-Meteo vers un modèle Windy
-                        windy_model = "arome"
-                        if "arpege" in model.lower():
-                            windy_model = "iconEu"
-                            
-                        levels = fetcher.fetch_from_windy(lat, lon, model=windy_model)
-                        model = windy_model
-                        st.success("Succès avec l'API Windy!")
-                    else:
-                        raise ValueError("Impossible de récupérer les données météo. Essayez d'utiliser une clé API Windy.")
-        elif data_source == "windy":
-            with st.spinner("Récupération des données météo via Windy..."):
-                st.info("Utilisation de l'API Windy")
-                if not api_key:
-                    raise ValueError("Veuillez fournir une clé API Windy")
-                levels = fetcher.fetch_from_windy(lat, lon, model=model)
-            
 
         # Récupérer les informations sur les nuages et précipitations si disponibles
         cloud_info = getattr(fetcher, 'cloud_info', None)
@@ -457,13 +480,12 @@ def main():
     st.sidebar.header("Source des données")
     data_source = st.sidebar.radio(
         "Sélectionnez une source de données",
-        options=["Open-Meteo (sans clé API)", "API Windy"],
+        options=["Open-Meteo (sans clé API)"],
         index=0,  # Option par défaut : Open-Meteo
         help="Choisissez la source pour récupérer les données météorologiques"
     )
 
     use_openmeteo = (data_source == "Open-Meteo (sans clé API)")
-    use_windy = (data_source == "API Windy")
 
     # Modèle météo en fonction de la source de données
     if use_openmeteo:
@@ -485,25 +507,6 @@ def main():
         
         # Pas besoin de clé API pour Open-Meteo
         api_key = None
-    else:  # use_windy
-        model_options = ["arome", "gfs", "iconEu"]
-        model_descriptions = {
-            "arome": "AROME (France ~2.5km)",
-            "gfs": "GFS (Mondial ~27km)",
-            "iconEu": "ICON-EU (Europe ~7km)"
-        }
-        model_labels = [model_descriptions[m] for m in model_options]
-        model_index = st.sidebar.selectbox(
-            "Modèle météo",
-            options=range(len(model_options)),
-            format_func=lambda i: model_labels[i],
-            index=0
-        )
-        model = model_options[model_index]
-        
-        # Clé API nécessaire pour Windy
-        api_key = st.sidebar.text_input("Clé API Windy", type="password", 
-                                      help="Requis pour récupérer les données météo via Windy")
     
     # Option pour clé OpenAI (analyse IA)
     use_ai = st.sidebar.checkbox("Utiliser l'analyse IA externe (OpenAI)", value=False,
@@ -545,7 +548,7 @@ def main():
     # Section des paramètres de localisation
     st.subheader("Localisation")
     col1, col2, col3 = st.columns(3)
-    
+
     with col1:
         latitude = st.number_input("Latitude", 
                                  min_value=-90.0, max_value=90.0, 
@@ -567,14 +570,6 @@ def main():
                                       value=st.session_state.site_selection["altitude"], 
                                       step=10)
     
-    # Si un site prédéfini est sélectionné, utiliser son modèle associé
-    if not use_openmeteo and not use_windy:
-        # Afficher un sélecteur de modèle si aucune source n'est encore sélectionnée
-        model = st.selectbox("Modèle météo", 
-                           options=["arome", "gfs", "iconEu"],
-                           index=["arome", "gfs", "iconEu"].index(st.session_state.site_selection.get("model", "arome")),
-                           help="GFS: mondial (27km), Arome: Europe (2.5km), IconEu: Europe (7km)")
-    
     # Bouton pour lancer l'analyse
     analyze_clicked = st.button("Analyser l'émagramme")
     
@@ -585,162 +580,56 @@ def main():
         # Réinitialiser le flag pour éviter des analyses en boucle
         st.session_state.run_analysis = False
         
-        # Vérification de la clé API pour Windy
-        if use_windy and not api_key:
-            st.error("Veuillez entrer une clé API Windy pour utiliser cette source de données.")
-        else:
+        if use_openmeteo and not api_key:
             # Déterminer la source de données pour la fonction fetch_and_analyze
-            data_source_str = "open-meteo" if use_openmeteo else "windy"
+            data_source_str = "open-meteo"
             
             # Récupérer et analyser les données
             analyzer, analysis, detailed_analysis = fetch_and_analyze(
                 latitude, longitude, model, site_altitude, api_key, openai_key, delta_t, data_source=data_source_str
             )
             
-            # Le reste du code reste identique
+            # Si l'analyse est réussie, afficher les résultats
             if analyzer and analysis:
-                # Onglets pour organiser les résultats
-                tab1, tab2, tab3, tab4 = st.tabs(["Émagramme", "Résultats", "Données brutes", "Aide"])
+                # Afficher l'émagramme
+                st.subheader("Émagramme")
+                display_emagramme(analyzer, analysis)
+                
+                # Calculer l'information sur la couche convective
+                convective_layer = calculate_convective_layer_thickness(analyzer, analysis)
+                
+                # Créer et afficher la visualisation de la couche convective directement sous l'émagramme
+                st.subheader("Visualisation de la couche convective")
+                
+                # Explication de la couche convective (dans un expander pour ne pas prendre trop de place)
+                with st.expander("📚 Qu'est-ce que la couche convective ?"):
+                    st.markdown("""
+                    La couche convective est la partie de l'atmosphère où se produisent les mouvements verticaux 
+                    (ascendants et descendants) de l'air. C'est dans cette couche que se forment les thermiques
+                    exploitables pour le vol en parapente.
+                    
+                    Caractéristiques principales:
+                    - S'étend du sol jusqu'au plafond thermique
+                    - Présente un gradient de température d'environ 1°C/100m
+                    - La turbulence y est plus importante qu'en dehors
+                    - Plus elle est épaisse, plus le plafond des thermiques est élevé
+                    """)
+                
+                # Afficher les informations de la couche convective
+                cols = st.columns([1, 2])
+                with cols[0]:
+                    st.metric("Épaisseur de la couche convective", f"{convective_layer['thickness']:.0f} m")
+                    st.write(f"**Qualité des ascendances**: {convective_layer['description']}")
+                
+                with cols[1]:
+                    # Créer et afficher le graphique de la couche convective
+                    fig = create_convective_layer_plot(analysis, analysis.inversion_layers)
+                    st.pyplot(fig)
+                
+                # Onglets pour le reste des informations
+                tab1, tab2, tab3 = st.tabs(["Résultats", "Données brutes", "Aide"])
                 
                 with tab1:
-                    # Créer deux colonnes pour l'émagramme et l'analyse détaillée
-                    col1, col2 = st.columns([3, 2])
-                    
-                    with col1:
-                        # Afficher l'émagramme sans l'analyse textuelle
-                        fig = analyzer.plot_emagramme(analysis, show=False)
-                        st.pyplot(fig)
-                    
-                    with col2:
-                        # Afficher l'analyse détaillée améliorée avec mise en forme Markdown
-                        if detailed_analysis:
-                            st.markdown(detailed_analysis)
-                        else:
-                            st.info("Aucune analyse détaillée disponible")
-                
-                with tab2:
-                    # Dans votre onglet d'analyse de résultats
-                    st.subheader("Analyse de la couche convective")
-
-                    # Ajouter l'expander d'aide juste en dessous du titre
-                    with st.expander("📚 Qu'est-ce que la couche convective ?"):
-                        st.markdown("""
-                        La couche convective est la partie de l'atmosphère où se produisent les mouvements verticaux 
-                        (ascendants et descendants) de l'air. C'est dans cette couche que se forment les thermiques
-                        exploitables pour le vol en parapente.
-                        
-                        Caractéristiques principales:
-                        - S'étend du sol jusqu'au plafond thermique
-                        - Présente un gradient de température d'environ 1°C/100m
-                        - La turbulence y est plus importante qu'en dehors
-                        - Plus elle est épaisse, plus le plafond des thermiques est élevé
-                        """)
-                    # Continuer avec l'affichage normal des données d'analyse
-                    convective_layer = calculate_convective_layer_thickness(analyzer, analysis)
-                        
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("Épaisseur de la couche convective", f"{convective_layer['thickness']:.0f} m")
-                        st.write(f"**Qualité des ascendances**: {convective_layer['description']}")
-                    
-                    with col2:
-                        # Visualisation améliorée de la couche convective
-                        fig, ax = plt.subplots(figsize=(4, 6))
-                        
-                        # Définir les altitudes clés
-                        ground_alt = convective_layer['ground_altitude']
-                        thermal_ceiling = convective_layer['thermal_ceiling']
-                        anabatic_zone_top = min(ground_alt + 500, thermal_ceiling)
-                        
-                        # Zone convective complète (en vert clair avec plus de transparence)
-                        ax.axhspan(ground_alt, thermal_ceiling, alpha=0.1, color='green', 
-                                label="Couche convective")
-                        
-                        # Zone anabatique (premiers 500m au-dessus du sol)
-                        ax.axhspan(ground_alt, anabatic_zone_top, alpha=0.1, color='blue', 
-                                label="Zone anabatique")
-                        
-                        # Ajout de lignes horizontales pour marquer les altitudes clés
-                        ax.axhline(y=ground_alt, color='brown', linestyle='-', linewidth=1.5)
-                        ax.axhline(y=thermal_ceiling, color='purple', linestyle='--', linewidth=1.5)
-                        ax.axhline(y=anabatic_zone_top, color='blue', linestyle='--', linewidth=1)
-                        
-                        # Ajout d'annotations pour les altitudes
-                        ax.text(0.05, ground_alt + 50, f"Sol: {ground_alt:.0f}m", 
-                                fontsize=8, ha='left', va='bottom')
-                        ax.text(0.05, thermal_ceiling - 50, f"Plafond: {thermal_ceiling:.0f}m", 
-                                fontsize=8, ha='left', va='top')
-                        ax.text(0.05, anabatic_zone_top - 20, f"Limite anabatique: {anabatic_zone_top:.0f}m", 
-                                fontsize=8, ha='left', va='top', color='blue')
-                        
-                        # Ajouter une information sur l'épaisseur de la couche
-                        thickness = thermal_ceiling - ground_alt
-                        ax.text(0.5, (ground_alt + thermal_ceiling) / 2, 
-                                f"Épaisseur: {thickness:.0f}m", 
-                                fontsize=9, ha='center', va='center', 
-                                bbox=dict(facecolor='white', alpha=0.7, boxstyle='round'))
-                        
-                        # Si des inversions sont présentes, les ajouter au graphique
-                        if analysis.inversion_layers:
-                            for i, (base, top) in enumerate(analysis.inversion_layers):
-                                if base < thermal_ceiling + 500:  # Ne montrer que les inversions pertinentes
-                                    ax.axhspan(base, top, alpha=0.15, color='red', 
-                                            label=f"Inversion {i+1}" if i == 0 else "")
-                                    ax.text(0.05, (base + top) / 2, f"Inv. {i+1}: {base:.0f}-{top:.0f}m", 
-                                            fontsize=8, ha='left', va='center', color='darkred')
-                        
-                        # Configuration des axes
-                        ax.set_ylim(max(0, ground_alt - 200), thermal_ceiling + 500)
-                        ax.set_xlim(0, 1)
-                        ax.set_ylabel("Altitude (m)")
-                        ax.set_xticks([])  # Supprimer les graduations de l'axe X
-                        
-                        # Ajouter un titre au graphique
-                        ax.set_title("Structure verticale de l'atmosphère", fontsize=10)
-                        
-                        # Ajouter une légende
-                        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.05), 
-                                fancybox=True, shadow=True, ncol=2, fontsize=8)
-                        
-                        # Afficher le graphique
-                        st.pyplot(fig)
-
-                    if analysis.inversion_layers:
-                        st.subheader("Analyse des inversions")
-                        
-                        # Remplacer le bouton par un expander
-                        with st.expander("📚 Comment les inversions affectent-elles le vol ?"):
-                            st.markdown("""
-                            Une **inversion thermique** est une couche d'air où la température augmente avec l'altitude, 
-                            contrairement à la situation normale où la température diminue en montant.
-                            
-                            ### Impact sur le vol en parapente :
-                            
-                            - **Blocage des thermiques** : Les inversions agissent comme un "couvercle" qui stoppe 
-                            l'ascension des thermiques, limitant ainsi la hauteur maximale de vol.
-                            
-                            - **Stabilisation de l'air** : L'air est plus stable dans une inversion, réduisant 
-                            la probabilité de formation de turbulences et de thermiques.
-                            
-                            - **Accumulation d'humidité** : Les inversions peuvent piéger l'humidité sous elles, 
-                            créant des couches de nuages stratiformes.
-                            
-                            - **Position critique** : Une inversion basse (< 1500m) est particulièrement limitante 
-                            car elle réduit considérablement le volume d'air exploitable pour le vol.
-                            """)
-                        
-                        # Continuer avec votre code d'analyse existant
-                        inversion_analysis = analyze_inversions_impact(analysis)
-                        
-                        for i, inv in enumerate(inversion_analysis["inversions"]):
-                            if inv["severity"] == "critical":
-                                st.error(f"Inversion {i+1}: De {inv['base']:.0f}m à {inv['top']:.0f}m - {inv['impact']}")
-                            elif inv["severity"] == "warning":
-                                st.warning(f"Inversion {i+1}: De {inv['base']:.0f}m à {inv['top']:.0f}m - {inv['impact']}")
-                            else:
-                                st.info(f"Inversion {i+1}: De {inv['base']:.0f}m à {inv['top']:.0f}m - {inv['impact']}")
-
-
                     st.subheader("Analyse des mouvements d'air verticaux")
 
                     # Option pour l'orientation de la pente
@@ -827,6 +716,42 @@ def main():
                                 st.metric("Sommet des nuages", f"{analysis.cloud_top:.0f} m")
                             else:
                                 st.info("Thermiques bleus (pas de condensation)")
+                    
+                    # Analyse des inversions (si présentes)
+                    if analysis.inversion_layers:
+                        st.subheader("Analyse des inversions")
+                        
+                        # Explication des inversions dans un expander
+                        with st.expander("📚 Comment les inversions affectent-elles le vol ?"):
+                            st.markdown("""
+                            Une **inversion thermique** est une couche d'air où la température augmente avec l'altitude, 
+                            contrairement à la situation normale où la température diminue en montant.
+                            
+                            ### Impact sur le vol en parapente :
+                            
+                            - **Blocage des thermiques** : Les inversions agissent comme un "couvercle" qui stoppe 
+                            l'ascension des thermiques, limitant ainsi la hauteur maximale de vol.
+                            
+                            - **Stabilisation de l'air** : L'air est plus stable dans une inversion, réduisant 
+                            la probabilité de formation de turbulences et de thermiques.
+                            
+                            - **Accumulation d'humidité** : Les inversions peuvent piéger l'humidité sous elles, 
+                            créant des couches de nuages stratiformes.
+                            
+                            - **Position critique** : Une inversion basse (< 1500m) est particulièrement limitante 
+                            car elle réduit considérablement le volume d'air exploitable pour le vol.
+                            """)
+                        
+                        # Analyse des inversions
+                        inversion_analysis = analyze_inversions_impact(analysis)
+                        
+                        for i, inv in enumerate(inversion_analysis["inversions"]):
+                            if inv["severity"] == "critical":
+                                st.error(f"Inversion {i+1}: De {inv['base']:.0f}m à {inv['top']:.0f}m - {inv['impact']}")
+                            elif inv["severity"] == "warning":
+                                st.warning(f"Inversion {i+1}: De {inv['base']:.0f}m à {inv['top']:.0f}m - {inv['impact']}")
+                            else:
+                                st.info(f"Inversion {i+1}: De {inv['base']:.0f}m à {inv['top']:.0f}m - {inv['impact']}")
                         
                         # Afficher les informations sur les nuages si disponibles
                         if (analysis.low_cloud_cover is not None or 
@@ -852,12 +777,6 @@ def main():
                             st.subheader("Précipitations")
                             st.info(f"{analysis.precipitation_description}")
                         
-                        # Inversions
-                        if analysis.inversion_layers:
-                            st.subheader("Couches d'inversion")
-                            for i, (base, top) in enumerate(analysis.inversion_layers):
-                                st.write(f"Inversion {i+1}: De {base:.0f}m à {top:.0f}m")
-                        
                         # Conditions de vol
                         st.subheader("Conditions de vol")
                         st.write(analysis.flight_conditions)
@@ -878,7 +797,7 @@ def main():
                             for gear in analysis.recommended_gear:
                                 st.write(f"- {gear}")
                 
-                with tab3:
+                with tab2:
                     # Afficher les niveaux atmosphériques
                     st.subheader("Niveaux atmosphériques")
                     data = {
@@ -943,7 +862,7 @@ def main():
                         mime="text/csv",
                     )
 
-                with tab4:
+                with tab3:
                     st.header("Guide de la météorologie aérologique")
                     
                     st.write("""
