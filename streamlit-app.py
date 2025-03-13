@@ -12,6 +12,7 @@ import numpy as np
 import re  # Nécessaire pour le nouveau script d'analyse
 import logging
 from datetime import datetime
+from retry_requests import retry
 
 # Importer les classes et fonctions du fichier principal
 from emagramme_analyzer import (
@@ -181,8 +182,11 @@ def create_convective_layer_plot(analysis, inversions=None):
 
 # Fonction pour obtenir et analyser les données
 def fetch_and_analyze(lat, lon, model, site_altitude, api_key=None, openai_key=None, delta_t=THERMAL_TRIGGER_DELTA, 
-                     data_source="open-meteo"):
-    """Récupère les données et effectue l'analyse"""
+                     data_source="open-meteo", timestep=0, fetch_evolution=False, evolution_hours=24, evolution_step=3):
+    """
+    Récupère les données et effectue l'analyse pour un pas de temps spécifique, 
+    avec option pour récupérer l'évolution temporelle
+    """
     
     # Mettre à jour le delta de température si nécessaire
     global THERMAL_TRIGGER_DELTA
@@ -195,27 +199,54 @@ def fetch_and_analyze(lat, lon, model, site_altitude, api_key=None, openai_key=N
     # Attribuer l'altitude du site au fetcher
     fetcher.site_altitude = site_altitude
     
-    # Récupérer les données - avec gestion des erreurs
+    # Récupérer les données avec gestion des erreurs
     try:
         if data_source == "open-meteo":
-            with st.spinner("Récupération des données météo via Open-Meteo..."):
+            with st.spinner(f"Récupération des données météo via Open-Meteo (pour H+{timestep})..."):
                 st.info("Utilisation d'Open-Meteo (sans clé API)")
+                
+                levels = None
+                evolution_data = None
+                
                 try:
-                    levels = fetcher.fetch_from_openmeteo(lat, lon, model=model)
+                    if fetch_evolution:
+                        levels, evolution_data = fetcher.fetch_from_openmeteo(
+                            lat, lon, model=model, timestep=timestep,
+                            fetch_evolution=True, evolution_hours=evolution_hours, evolution_step=evolution_step
+                        )
+                    else:
+                        levels = fetcher.fetch_from_openmeteo(
+                            lat, lon, model=model, timestep=timestep
+                        )
                 except Exception as e:
                     st.error(f"Erreur avec Open-Meteo: {str(e)}")
+                    if fetch_evolution:
+                        return None, None, None, None
+                    else:
+                        return None, None, None
+                
+                if levels is None:
+                    st.error("Impossible de récupérer les données météorologiques.")
+                    if fetch_evolution:
+                        return None, None, None, None
+                    else:
+                        return None, None, None
 
         # Récupérer les informations sur les nuages et précipitations si disponibles
         cloud_info = getattr(fetcher, 'cloud_info', None)
         precip_info = getattr(fetcher, 'precip_info', None)
         
         # Initialiser l'analyseur avec toutes les informations
+        if timestep > 0:
+            model_name = f"{model} H+{timestep}"
+        else:
+            model_name = model
+            
         analyzer = EmagrammeAnalyzer(levels, site_altitude=site_altitude, 
                                    cloud_info=cloud_info, precip_info=precip_info,
-                                   model_name=model)
+                                   model_name=model_name)
         
         # IMPORTANT : Copier les informations directement dans l'objet analyzer
-        # pour qu'elles soient facilement accessibles par l'interface
         analyzer.cloud_info = cloud_info
         analyzer.precip_info = precip_info
         
@@ -240,12 +271,228 @@ def fetch_and_analyze(lat, lon, model, site_altitude, api_key=None, openai_key=N
             with st.spinner("Génération de l'analyse détaillée..."):
                 detailed_analysis = analyze_emagramme_for_pilot(analysis)
         
-        return analyzer, analysis, detailed_analysis
+        # Si fetch_evolution est activé, renvoyer également les données d'évolution
+        if fetch_evolution:
+            return analyzer, analysis, detailed_analysis, evolution_data
+        else:
+            return analyzer, analysis, detailed_analysis
         
     except Exception as e:
         st.error(f"Erreur lors de la récupération ou de l'analyse des données: {str(e)}")
         logger.error(f"Erreur lors de la récupération/analyse: {e}", exc_info=True)
-        return None, None, None
+        # Retourner les valeurs appropriées selon fetch_evolution
+        if fetch_evolution:
+            return None, None, None, None
+        else:
+            return None, None, None
+
+def create_evolution_plots(evolution_data, site_altitude):
+    """
+    Crée les graphiques d'évolution basés sur les données temporelles
+    """
+    import plotly.graph_objects as go
+    import plotly.express as px
+    from datetime import datetime
+    import pandas as pd
+    
+    # Vérifier si les données d'évolution existent
+    if not evolution_data or not all(key in evolution_data for key in ["timestamps", "thermal_ceilings", "thermal_gradients"]):
+        st.error("Aucune donnée d'évolution disponible.")
+        # Retourner un dictionnaire avec les clés attendues mais vide
+        empty_best_period = {
+            "time": "N/A",
+            "score": 0,
+            "ceiling": 0,
+            "gradient": 0,
+            "clouds": 0,
+            "rain": 0,
+            "temp": 0,
+            "wind": 0
+        }
+        return {}, empty_best_period, pd.DataFrame()
+    
+    # Créer un DataFrame pour faciliter la manipulation
+    try:
+        df = pd.DataFrame({
+            "timestamp": evolution_data["timestamps"],
+            "thermal_ceiling": evolution_data["thermal_ceilings"],
+            "thermal_gradient": evolution_data["thermal_gradients"],
+            "thermal_strength": evolution_data["thermal_strengths"],
+            "temperature": evolution_data["temperatures"],
+            "wind_speed": evolution_data["wind_speeds"],
+            "wind_direction": evolution_data["wind_directions"],
+            "cloud_cover_low": [cloud["low"] for cloud in evolution_data["cloud_covers"]],
+            "cloud_cover_mid": [cloud["mid"] for cloud in evolution_data["cloud_covers"]],
+            "cloud_cover_high": [cloud["high"] for cloud in evolution_data["cloud_covers"]],
+            "cloud_cover_total": [cloud["total"] for cloud in evolution_data["cloud_covers"]],
+            "rain": [precip["rain"] for precip in evolution_data["precipitation"]],
+            "precip_probability": [precip["probability"] for precip in evolution_data["precipitation"]]
+        })
+    except Exception as e:
+        st.error(f"Erreur lors de la création du DataFrame d'évolution: {e}")
+        empty_best_period = {
+            "time": "N/A",
+            "score": 0,
+            "ceiling": 0,
+            "gradient": 0,
+            "clouds": 0,
+            "rain": 0,
+            "temp": 0,
+            "wind": 0
+        }
+        return {}, empty_best_period, pd.DataFrame()
+    
+    # Vérifier si le DataFrame est vide
+    if df.empty:
+        st.error("Aucune donnée d'évolution disponible.")
+        return {}, {}, pd.DataFrame()
+    
+    # Convertir le plafond thermique relatif (au-dessus du niveau de la mer) à relatif au site
+    df["thermal_ceiling_relative"] = df["thermal_ceiling"] - site_altitude
+    
+    # Convertir les timestamps en format lisible
+    df["time_str"] = [ts.strftime("%d/%m %Hh") for ts in df["timestamp"]]
+    
+    # Créer les graphiques
+    graphs = {}
+    
+    # 1. Évolution du plafond thermique
+    fig_ceiling = px.line(df, x="time_str", y="thermal_ceiling_relative", 
+                         labels={"thermal_ceiling_relative": "Plafond thermique (m au-dessus du site)", 
+                                "time_str": "Date/Heure"},
+                         title="Évolution du plafond thermique",
+                         markers=True)
+    fig_ceiling.update_layout(hovermode="x unified")
+    graphs["ceiling"] = fig_ceiling
+    
+    # 2. Évolution du gradient thermique
+    fig_gradient = px.line(df, x="time_str", y="thermal_gradient",
+                          labels={"thermal_gradient": "Gradient (°C/1000m)", 
+                                 "time_str": "Date/Heure"},
+                          title="Évolution du gradient thermique",
+                          markers=True)
+    fig_gradient.update_layout(hovermode="x unified")
+    graphs["gradient"] = fig_gradient
+    
+    # 3. Évolution de la couverture nuageuse (graphique empilé)
+    fig_clouds = go.Figure()
+    fig_clouds.add_trace(go.Bar(x=df["time_str"], y=df["cloud_cover_low"],
+                              name="Nuages bas", marker_color="royalblue"))
+    fig_clouds.add_trace(go.Bar(x=df["time_str"], y=df["cloud_cover_mid"],
+                              name="Nuages moyens", marker_color="lightblue"))
+    fig_clouds.add_trace(go.Bar(x=df["time_str"], y=df["cloud_cover_high"],
+                              name="Nuages hauts", marker_color="lightskyblue"))
+    fig_clouds.update_layout(barmode="stack", 
+                           title="Évolution de la couverture nuageuse",
+                           xaxis_title="Date/Heure", 
+                           yaxis_title="Couverture (%)",
+                           hovermode="x unified")
+    graphs["clouds"] = fig_clouds
+    
+    # 4. Précipitations et probabilité
+    fig_precip = go.Figure()
+    fig_precip.add_trace(go.Bar(x=df["time_str"], y=df["rain"],
+                              name="Pluie (mm)", marker_color="blue"))
+    fig_precip.add_trace(go.Scatter(x=df["time_str"], y=df["precip_probability"],
+                                  name="Probabilité (%)", mode="lines+markers",
+                                  marker_color="red", line_color="red", yaxis="y2"))
+    fig_precip.update_layout(
+        title="Prévisions de précipitations",
+        xaxis_title="Date/Heure",
+        yaxis=dict(title="Pluie (mm)", side="left", showgrid=False),
+        yaxis2=dict(title="Probabilité (%)", overlaying="y", side="right", range=[0, 100]),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    graphs["precipitation"] = fig_precip
+    
+    # 5. Météogramme combiné (température, vent et plafond)
+    fig_meteo = go.Figure()
+    
+    # Température
+    fig_meteo.add_trace(go.Scatter(x=df["time_str"], y=df["temperature"],
+                                 name="Température (°C)", mode="lines+markers",
+                                 line_color="orange", marker_color="orange"))
+    
+    # Vent
+    fig_meteo.add_trace(go.Scatter(x=df["time_str"], y=df["wind_speed"],
+                                 name="Vent (km/h)", mode="lines+markers",
+                                 line_color="green", marker_color="green", yaxis="y2"))
+    
+    # Plafond thermique (échelle secondaire)
+    fig_meteo.add_trace(go.Scatter(x=df["time_str"], y=df["thermal_ceiling_relative"],
+                                 name="Plafond (m)", mode="lines+markers", line=dict(dash="dash"),
+                                 line_color="purple", marker_color="purple", yaxis="y3"))
+    
+    fig_meteo.update_layout(
+        title="Météogramme: Température, Vent et Plafond",
+        xaxis_title="Date/Heure",
+        yaxis=dict(title="Température (°C)", side="left"),
+        yaxis2=dict(title="Vent (km/h)", overlaying="y", side="right"),
+        yaxis3=dict(title="Plafond (m)", overlaying="y", side="right", position=0.85),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    graphs["meteo"] = fig_meteo
+    
+    # Analyse pour trouver les périodes optimales de vol
+    df["vol_score"] = (
+        df["thermal_ceiling_relative"] / 3000 * 0.4 +  # Plafond (40% du score)
+        (df["thermal_gradient"] / 10) * 0.3 +  # Gradient (30% du score)
+        (1 - df["cloud_cover_total"] / 100) * 0.1 +  # Ciel clair (10% du score)
+        (1 - df["rain"]) * 0.2  # Absence de pluie (20% du score)
+    )
+    
+    # Normaliser les scores entre 0 et 1
+    df["vol_score"] = df["vol_score"].clip(0, 1)
+    
+    # Convertir en pourcentage
+    df["vol_score"] = (df["vol_score"] * 100).round(1)
+    
+    # Graphique des scores de vol
+    fig_score = px.bar(df, x="time_str", y="vol_score",
+                     labels={"vol_score": "Score (%)", "time_str": "Date/Heure"},
+                     title="Évaluation des conditions de vol",
+                     color="vol_score",
+                     color_continuous_scale=["red", "yellow", "green"],
+                     range_color=[0, 100])
+    fig_score.update_layout(hovermode="x unified")
+    graphs["vol_score"] = fig_score
+    
+    # Initialiser with default values in case of empty data
+    best_period = {
+        "time": "N/A",
+        "score": 0,
+        "ceiling": 0,
+        "gradient": 0,
+        "clouds": 0,
+        "rain": 0,
+        "temp": 0,
+        "wind": 0
+    }
+    
+    # Trouver la meilleure période (gérer le cas où df est vide)
+    if not df.empty and len(df["vol_score"]) > 0:
+        try:
+            best_index = df["vol_score"].idxmax()
+            best_time = df.loc[best_index, "time_str"]
+            best_score = df.loc[best_index, "vol_score"]
+            
+            # Récupérer des informations sur la meilleure période
+            best_period = {
+                "time": best_time,
+                "score": best_score,
+                "ceiling": df.loc[best_index, "thermal_ceiling_relative"],
+                "gradient": df.loc[best_index, "thermal_gradient"],
+                "clouds": df.loc[best_index, "cloud_cover_total"],
+                "rain": df.loc[best_index, "rain"],
+                "temp": df.loc[best_index, "temperature"],
+                "wind": df.loc[best_index, "wind_speed"]
+            }
+        except Exception as e:
+            st.warning(f"Impossible de déterminer la meilleure période: {e}")
+    
+    return graphs, best_period, df
 
 def analyze_inversions_impact(analysis):
     """Analyse l'impact des inversions sur les ascendances thermiques"""
@@ -525,7 +772,50 @@ def main():
                          min_value=1.0, max_value=6.0, value=3.0, step=0.5,
                          help="Différence de température requise pour déclencher un thermique")
     
-    # Section pour les sites prédéfinis sur une seule colonne
+    # Nouvelle option pour l'évolution temporelle
+        fetch_evolution_enabled = st.checkbox("Afficher l'évolution des conditions", value=True,
+                                           help="Récupère les données pour plusieurs heures et affiche des graphiques d'évolution")
+        
+        if fetch_evolution_enabled:
+            col1, col2 = st.columns(2)
+            with col1:
+                evolution_hours = st.slider("Période d'évolution (heures)", 
+                                        min_value=6, max_value=48, value=24, step=6,
+                                        help="Durée totale de la période d'évolution à analyser")
+            with col2:
+                evolution_step = st.slider("Pas de temps (heures)", 
+                                        min_value=1, max_value=6, value=3, step=1,
+                                        help="Intervalle entre chaque point d'analyse")
+        else:
+            evolution_hours = 24
+            evolution_step = 3
+
+    # Section pour le pas de temps de prévision (nouveau)
+    st.sidebar.header("Temps de prévision")
+    
+    # Déterminer la plage de temps disponible selon le modèle
+    if model.startswith("meteofrance_arome"):
+        max_timestep = 36
+        timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
+                                    help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
+        st.sidebar.info(f"AROME: prévisions disponibles jusqu'à H+{max_timestep}")
+    else:  # ARPEGE
+        max_timestep = 96
+        timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
+                                    help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
+        st.sidebar.info(f"ARPÈGE: prévisions disponibles jusqu'à H+{max_timestep}")
+    
+    # Convertir le timestep en jours et heures pour l'affichage
+    days = timestep // 24
+    hours = timestep % 24
+    if timestep > 0:
+        if days > 0:
+            forecast_text = f"Prévision pour J+{days}, {hours}h"
+        else:
+            forecast_text = f"Prévision pour H+{hours}"
+        st.sidebar.success(forecast_text)
+    
+    # Section pour les sites prédéfinis
     st.sidebar.header("Sites prédéfinis")
     st.sidebar.markdown("Cliquez sur un bouton pour charger un site et lancer l'analyse")
     
@@ -539,7 +829,7 @@ def main():
         }
         st.session_state.run_analysis = True
     
-    # Créer les boutons pour chaque site prédéfini sur une seule colonne
+    # Créer les boutons pour chaque site prédéfini
     for i, site in enumerate(PRESET_SITES):
         st.sidebar.button(site["name"], key=f"site_{i}", 
                         on_click=set_site_and_analyze, 
@@ -570,10 +860,10 @@ def main():
                                       value=st.session_state.site_selection["altitude"], 
                                       step=10)
     
-    # Bouton pour lancer l'analyse
+    # Bouton pour lancer l'analyse (IMPORTANT: définir 'analyze_clicked' AVANT de l'utiliser)
     analyze_clicked = st.button("Analyser l'émagramme")
     
-    # Lancer l'analyse si le bouton est cliqué ou si un site prédéfini a été sélectionné
+    # Maintenant on peut utiliser analyze_clicked
     should_run_analysis = analyze_clicked or st.session_state.run_analysis
 
     if should_run_analysis:
@@ -584,10 +874,20 @@ def main():
             # Déterminer la source de données pour la fonction fetch_and_analyze
             data_source_str = "open-meteo"
             
-            # Récupérer et analyser les données
-            analyzer, analysis, detailed_analysis = fetch_and_analyze(
-                latitude, longitude, model, site_altitude, api_key, openai_key, delta_t, data_source=data_source_str
-            )
+            # Récupérer et analyser les données (modifié pour l'évolution)
+            if fetch_evolution_enabled:
+                with st.spinner(f"Récupération des données d'évolution sur {evolution_hours}h..."):
+                    analyzer, analysis, detailed_analysis, evolution_data = fetch_and_analyze(
+                        latitude, longitude, model, site_altitude, api_key, openai_key, delta_t, 
+                        data_source=data_source_str, timestep=timestep,
+                        fetch_evolution=True, evolution_hours=evolution_hours, evolution_step=evolution_step
+                    )
+            else:
+                analyzer, analysis, detailed_analysis = fetch_and_analyze(
+                    latitude, longitude, model, site_altitude, api_key, openai_key, delta_t, 
+                    data_source=data_source_str, timestep=timestep
+                )
+                evolution_data = None
             
             # Si l'analyse est réussie, afficher les résultats
             if analyzer and analysis:
@@ -627,7 +927,10 @@ def main():
                     st.pyplot(fig)
                 
                 # Onglets pour le reste des informations
-                tab1, tab2, tab3 = st.tabs(["Résultats", "Données brutes", "Aide"])
+                if fetch_evolution_enabled and evolution_data:
+                    tab1, tab2, tab3, tab4 = st.tabs(["Résultats", "Évolution", "Données brutes", "Aide"])
+                else:
+                    tab1, tab2, tab3 = st.tabs(["Résultats", "Données brutes", "Aide"])
                 
                 with tab1:
                     st.subheader("Analyse des mouvements d'air verticaux")
@@ -695,8 +998,20 @@ def main():
                     else:
                         # Affichage normal pour les conditions volables
                         st.subheader("Informations générales")
-                        # Ajoutez cette ligne pour afficher le modèle utilisé
-                        st.info(f"Modèle météo utilisé: {model.upper()}")
+                        
+                        # Afficher le modèle et l'heure de prévision
+                        forecast_time = ""
+                        if "H+" in analysis.model_name:
+                            model_parts = analysis.model_name.split("H+")
+                            model_name = model_parts[0].strip()
+                            hour = int(model_parts[1])
+                            days = hour // 24
+                            remaining_hours = hour % 24
+                            if days > 0:
+                                forecast_time = f" - Prévision pour J+{days}, {remaining_hours}h"
+                            else:
+                                forecast_time = f" - Prévision pour H+{hour}"
+                        st.info(f"Modèle météo utilisé: {model_name.upper()}{forecast_time}")
 
                         col1, col2, col3 = st.columns(3)
                         with col1:
@@ -797,6 +1112,78 @@ def main():
                             for gear in analysis.recommended_gear:
                                 st.write(f"- {gear}")
                 
+                if fetch_evolution_enabled and evolution_data and "tab2" in locals():
+                    with tab2:
+                        st.header("Évolution des conditions sur la période")
+                        
+                        # Créer tous les graphiques d'évolution
+                        with st.spinner("Génération des graphiques d'évolution..."):
+                            graphs, best_period, evolution_df = create_evolution_plots(evolution_data, site_altitude)
+                        
+                        # Vérifier que best_period contient les clés attendues
+                        if graphs and best_period and "time" in best_period:
+                            # Afficher le résumé des meilleures périodes
+                            st.subheader("Meilleure période de vol")
+                            summary_cols = st.columns(4)
+                            with summary_cols[0]:
+                                st.metric("Meilleure période", best_period["time"])
+                                st.metric("Score global", f"{best_period['score']:.0f}%")
+                            
+                            with summary_cols[1]:
+                                st.metric("Plafond thermique", f"{best_period['ceiling']:.0f}m")
+                                st.metric("Gradient", f"{best_period['gradient']:.1f}°C/1000m")
+                            
+                            with summary_cols[2]:
+                                st.metric("Température", f"{best_period['temp']:.1f}°C")
+                                st.metric("Nuages", f"{best_period['clouds']:.0f}%")
+                            
+                            with summary_cols[3]:
+                                st.metric("Vent", f"{best_period['wind']:.1f}km/h")
+                                if best_period['rain'] > 0:
+                                    st.metric("Pluie", f"{best_period['rain']:.1f}mm")
+                                else:
+                                    st.metric("Pluie", "0mm")
+                            
+                            # Afficher les graphiques seulement s'ils existent
+                            if "meteo" in graphs:
+                                # Afficher le météogramme simplifié
+                                st.subheader("Météogramme")
+                                st.plotly_chart(graphs["meteo"], use_container_width=True)
+                            
+                            if "vol_score" in graphs:
+                                # Afficher le graphique des scores de vol
+                                st.subheader("Évaluation des conditions de vol")
+                                st.plotly_chart(graphs["vol_score"], use_container_width=True)
+                            
+                            # Autres graphiques d'évolution dans des expanders
+                            if "ceiling" in graphs:
+                                with st.expander("Évolution du plafond thermique"):
+                                    st.plotly_chart(graphs["ceiling"], use_container_width=True)
+                            
+                            if "gradient" in graphs:
+                                with st.expander("Évolution du gradient thermique"):
+                                    st.plotly_chart(graphs["gradient"], use_container_width=True)
+                            
+                            if "clouds" in graphs:
+                                with st.expander("Évolution de la couverture nuageuse"):
+                                    st.plotly_chart(graphs["clouds"], use_container_width=True)
+                            
+                            if "precipitation" in graphs:
+                                with st.expander("Prévisions de précipitations"):
+                                    st.plotly_chart(graphs["precipitation"], use_container_width=True)
+                            
+                            # Option pour télécharger les données d'évolution si disponibles
+                            if not evolution_df.empty:
+                                csv = evolution_df.to_csv(index=False)
+                                st.download_button(
+                                    label="Télécharger les données d'évolution (CSV)",
+                                    data=csv,
+                                    file_name=f"evolution_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                    mime="text/csv",
+                                )
+                        else:
+                            st.warning("Pas assez de données pour afficher l'évolution des conditions et déterminer la meilleure période de vol.")
+
                 with tab2:
                     # Afficher les niveaux atmosphériques
                     st.subheader("Niveaux atmosphériques")

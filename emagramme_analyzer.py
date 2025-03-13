@@ -1517,7 +1517,7 @@ class EmagrammeAnalyzer:
         self.pressures = original_pressures
         self.wind_directions = original_wind_directions
         self.wind_speeds = original_wind_speeds
-        
+
         return fig
     
 # 4. Classe EmagrammeAgent (après EmagrammeAnalysis)
@@ -1842,18 +1842,22 @@ class EmagrammeDataFetcher:
         self.api_key = api_key
     
 
-    def fetch_from_openmeteo(self, latitude, longitude, model="meteofrance_arome_france_hd", timestep=0):
+    def fetch_from_openmeteo(self, latitude, longitude, model="meteofrance_arome_france_hd", timestep=0, fetch_evolution=False, evolution_hours=24, evolution_step=3):
         """
-        Récupère les données d'émagramme depuis l'API Open-Meteo (sans clé API)
+        Récupère les données d'émagramme depuis l'API Open-Meteo avec support multi-horaire
         
         Args:
             latitude: Latitude du point d'intérêt
             longitude: Longitude du point d'intérêt
-            model: Modèle météo à utiliser ('meteofrance_arome_france_hd', 'meteofrance_arome_france', 'meteofrance_arpege_europe')
-            timestep: Pas de temps pour la prévision (0 = analyse)
+            model: Modèle météo à utiliser ('meteofrance_arome_france_hd', 'meteofrance_arpege_europe')
+            timestep: Pas de temps pour la prévision (0 = analyse, 1-36 pour AROME, 1-96 pour ARPEGE)
+            fetch_evolution: Si True, récupère les données pour plusieurs heures 
+            evolution_hours: Nombre d'heures total pour l'évolution temporelle
+            evolution_step: Intervalle (en heures) entre chaque point de données d'évolution
             
         Returns:
-            Liste d'objets AtmosphericLevel et informations sur les nuages
+            Liste d'objets AtmosphericLevel et informations sur les nuages.
+            Si fetch_evolution=True, retourne également un dictionnaire de données d'évolution
         """
         try:
             # Importer les packages nécessaires
@@ -1866,7 +1870,18 @@ class EmagrammeDataFetcher:
                 logger.error("Installez les packages avec 'pip install openmeteo-requests requests-cache retry-requests'")
                 raise ImportError("Packages requis pour Open-Meteo non installés")
             
-            logger.info(f"Récupération des données via Open-Meteo (modèle {model})")
+            # Déterminer la durée des prévisions selon le modèle
+            if model.startswith("meteofrance_arome"):
+                max_timestep = 36
+                forecast_days = 2  # 36 heures = 1.5 jours, arrondi à 2
+            else:  # ARPEGE
+                max_timestep = 96
+                forecast_days = 4  # 96 heures = 4 jours
+            
+            # Valider le timestep
+            timestep = min(max(0, timestep), max_timestep)
+            
+            logger.info(f"Récupération des données via Open-Meteo (modèle {model}, heure +{timestep}h)")
             
             # Setup the Open-Meteo API client with cache and retry
             cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
@@ -1900,7 +1915,7 @@ class EmagrammeDataFetcher:
                 "longitude": longitude,
                 "hourly": hourly_vars,
                 "models": [model],
-                "forecast_days": 1
+                "forecast_days": forecast_days
             }
             
             # Effectuer la requête API
@@ -2150,9 +2165,94 @@ class EmagrammeDataFetcher:
                 raise ValueError(f"Données de profil vertical insuffisantes dans la réponse Open-Meteo: seulement {len(levels)} niveaux")
             
             logger.info(f"Données récupérées: {len(levels)} niveaux atmosphériques de Open-Meteo")
+
+            # Si fetch_evolution est activé, extraire les données pour l'évolution temporelle
+            evolution_data = None
+            if fetch_evolution:
+                evolution_data = {
+                    "timestamps": [],
+                    "thermal_ceilings": [],
+                    "thermal_gradients": [],
+                    "thermal_strengths": [],
+                    "cloud_covers": [],
+                    "precipitation": [],
+                    "temperatures": [],
+                    "wind_speeds": [],
+                    "wind_directions": []
+                }
+                
+                # Déterminer les indices pour l'évolution
+                start_idx = timestep
+                end_idx = min(start_idx + evolution_hours, len(hourly_df))
+                
+                # Extraire les données pour chaque pas de temps
+                for i in range(start_idx, end_idx, evolution_step):
+                    if i < len(hourly_df):
+                        # Ajouter le timestamp
+                        evolution_data["timestamps"].append(hourly_df["date"].iloc[i])
+                        
+                        # Extraire et calculer les données météo pour ce timestamp
+                        temp_data = hourly_df.iloc[i]
+                        
+                        # Température et humidité de surface
+                        evolution_data["temperatures"].append(temp_data.get("temperature_2m", 0))
+                        
+                        # Vent de surface
+                        evolution_data["wind_speeds"].append(temp_data.get("wind_speed_10m", 0))
+                        evolution_data["wind_directions"].append(temp_data.get("wind_direction_10m", 0))
+                        
+                        # Couverture nuageuse
+                        cloud_cover = {
+                            "low": temp_data.get("cloud_cover_low", 0),
+                            "mid": temp_data.get("cloud_cover_mid", 0),
+                            "high": temp_data.get("cloud_cover_high", 0),
+                            "total": temp_data.get("cloud_cover", 0)
+                        }
+                        evolution_data["cloud_covers"].append(cloud_cover)
+                        
+                        # Précipitations
+                        rain = temp_data.get("rain", 0)
+                        precip_prob = temp_data.get("precipitation_probability", 0)
+                        evolution_data["precipitation"].append({
+                            "rain": rain,
+                            "probability": precip_prob
+                        })
+                        
+                        # Pour les autres métriques (plafond thermique, gradient, force), on utilise
+                        # une estimation simplifiée basée sur les données disponibles
+                        # Cela sera remplacé par une vraie analyse lors de l'affichage
+                        
+                        # Pour le plafond thermique, on utilise une estimation grossière
+                        # basée sur la différence de température entre la surface et 850hPa
+                        t_surface = temp_data.get("temperature_2m", 15)
+                        t_850 = temp_data.get("temperature_850hPa", t_surface - 15)  # Par défaut ~15°C plus froid
+                        if not pd.isna(t_surface) and not pd.isna(t_850):
+                            est_gradient = (t_surface - t_850) / 15  # ~1500m différence
+                            est_ceiling = 1000 + 3000 * min(1, est_gradient / 10)  # Estimation grossière
+                            evolution_data["thermal_ceilings"].append(est_ceiling)
+                            evolution_data["thermal_gradients"].append(est_gradient * 10)  # En °C/1000m
+                            
+                            # Force thermique estimée
+                            if est_gradient < 5:
+                                evolution_data["thermal_strengths"].append("Faible")
+                            elif est_gradient < 7:
+                                evolution_data["thermal_strengths"].append("Modérée")
+                            elif est_gradient < 9:
+                                evolution_data["thermal_strengths"].append("Forte")
+                            else:
+                                evolution_data["thermal_strengths"].append("Très Forte")
+                        else:
+                            # Valeurs par défaut
+                            evolution_data["thermal_ceilings"].append(2000)
+                            evolution_data["thermal_gradients"].append(6.5)
+                            evolution_data["thermal_strengths"].append("Modérée")
             
-            return levels
-            
+            # Retourner les niveaux atmosphériques + les données d'évolution si demandées
+            if fetch_evolution:
+                return levels, evolution_data
+            else:
+                return levels
+                
         except Exception as e:
             logger.error(f"Erreur lors de la récupération des données Open-Meteo: {e}")
             raise
