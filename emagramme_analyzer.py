@@ -2202,8 +2202,19 @@ class EmagrammeDataFetcher:
                 start_idx = 0  # Toujours commencer à l'heure actuelle
                 end_idx = min(timestep + 1, len(hourly_df))
                 
+                # Déterminer l'intervalle d'évolution en fonction du modèle
+                # ECMWF a une résolution de 3h, donc on doit prendre un pas de 3 au minimum
+                evolution_interval = max(3, evolution_step) if model.startswith("ecmwf_ifs") else evolution_step
+                
+                # Vérifier s'il y a assez de données pour l'évolution
+                if end_idx - start_idx < 2:
+                    # Pas assez de données pour une évolution significative
+                    evolution_data["error"] = "insufficient_data"
+                    evolution_data["message"] = f"Le modèle {model} ne fournit pas assez de données pour l'évolution"
+                    return levels, evolution_data
+                
                 # Extraire les données pour chaque pas de temps
-                for i in range(start_idx, end_idx, evolution_step):
+                for i in range(start_idx, end_idx, evolution_interval):
                     if i < len(hourly_df):
                         # Ajouter le timestamp
                         evolution_data["timestamps"].append(hourly_df["date"].iloc[i])
@@ -2264,8 +2275,20 @@ class EmagrammeDataFetcher:
                             evolution_data["thermal_gradients"].append(6.5)
                             evolution_data["thermal_strengths"].append("Modérée")
             
-            # Retourner les niveaux atmosphériques + les données d'évolution si demandées
+
             if fetch_evolution:
+                # Vérifier si l'évolution couvre bien toute la période demandée
+                expected_points = (timestep // evolution_step) + 1
+                actual_points = len(evolution_data["timestamps"])
+                
+                # Attacher une métadonnée de couverture
+                evolution_data["coverage"] = {
+                    "expected_points": expected_points,
+                    "actual_points": actual_points,
+                    "coverage_ratio": actual_points / expected_points if expected_points > 0 else 0,
+                    "timestep": timestep,
+                    "max_available_time": actual_points * evolution_step if actual_points > 0 else 0
+                }
                 return levels, evolution_data
             else:
                 return levels

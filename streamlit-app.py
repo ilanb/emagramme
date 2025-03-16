@@ -1086,14 +1086,14 @@ def main():
             "meteofrance_arome_france_hd", 
             "meteofrance_arpege_europe",
             "meteofrance_arpege_world",
-            "ecmwf_ifs04",
+            "ecmwf_ifs025",  # Corriger le nom du modèle (au lieu de ecmwf_ifs04)
             "gfs_seamless"
         ]
         model_descriptions = {
             "meteofrance_arome_france_hd": "AROME HD (France ~2km)",
             "meteofrance_arpege_europe": "ARPEGE (Europe ~11km)",
             "meteofrance_arpege_world": "ARPEGE (Mondial ~40km)",
-            "ecmwf_ifs04": "ECMWF IFS (Mondial ~9km)",
+            "ecmwf_ifs025": "ECMWF IFS (Mondial ~25km)",  # Mise à jour du nom et de la résolution
             "gfs_seamless": "GFS (Mondial ~25km)"
         }
         model_labels = [model_descriptions[m] for m in model_options]
@@ -1112,8 +1112,12 @@ def main():
             st.sidebar.info("ARPEGE Europe: Résolution moyenne (~11km), bonne couverture européenne")
         elif model == "meteofrance_arpege_world":
             st.sidebar.info("ARPEGE Mondial: Résolution plus grossière (~40km), disponible partout dans le monde")
-        elif model == "ecmwf_ifs04":
-            st.sidebar.info("ECMWF IFS: Résolution fine pour un modèle global (~9km), performance élevée")
+        elif model == "ecmwf_ifs025":
+            st.info("""
+                **Note sur ECMWF IFS**: Ce modèle fournit des données à résolution 3-horaire (toutes les 3 heures) 
+                et non horaire comme les autres modèles. L'évolution des conditions peut donc paraître moins 
+                détaillée. Pour une analyse à court terme plus précise, privilégiez AROME HD.
+                """)
         elif model == "gfs_seamless":
             st.sidebar.info("GFS: Modèle américain, disponible mondialement, résolution ~25km")
         
@@ -1180,11 +1184,17 @@ def main():
         timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
                                     help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
         st.sidebar.info(f"ARPÈGE: prévisions disponibles jusqu'à H+{max_timestep}")
-    elif model == "ecmwf_ifs04":
-        max_timestep = 144  # ECMWF propose généralement jusqu'à 144 heures (6 jours)
-        timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
-                                    help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
-        st.sidebar.info(f"ECMWF IFS: prévisions disponibles jusqu'à H+{max_timestep}")
+    elif model == "ecmwf_ifs025":
+        max_timestep = 120  # 15 jours x 8 pas par jour = 120 pas (à 3h d'intervalle)
+        
+        # Avertir que les données sont à résolution 3-horaire
+        st.sidebar.warning("⚠️ Le modèle ECMWF IFS fournit des données à résolution 3-horaire, " +
+                        "ce qui peut limiter la précision de l'analyse d'évolution.")
+        
+        timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, step=3,  # Pas de 3h
+                                help=f"0 = analyse actuelle, les prévisions sont disponibles par pas de 3h")
+        
+        st.sidebar.info(f"ECMWF IFS: prévisions disponibles jusqu'à H+{max_timestep} par pas de 3h")
     elif model == "gfs_seamless":
         max_timestep = 120  # GFS propose généralement jusqu'à 120 heures (5 jours) pour les données complètes
         timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
@@ -1430,6 +1440,19 @@ def main():
                 
                 # Onglets pour le reste des informations
                 if fetch_evolution_enabled and evolution_data:
+                    # Vérifier si une erreur est signalée
+                    if "error" in evolution_data:
+                        st.error(evolution_data["message"])
+                        st.error("Veuillez essayer un autre modèle météo ou réduire la période de prévision.")
+                        # Ne pas continuer avec l'analyse d'évolution
+                    else:
+                        # Poursuivre avec votre code existant pour créer les graphiques
+                        with st.spinner("Génération des graphiques d'évolution..."):
+                            graphs, best_period, evolution_df = create_evolution_plots(evolution_data, site_altitude)
+                        
+                        # Vérifier si les graphiques ont été créés avec succès
+                        if not graphs or not best_period or "time" not in best_period:
+                            st.warning("Impossible de générer les graphiques d'évolution. Données insuffisantes.")
                     tab1, tab2, tab3, tab4 = st.tabs(["Résultats", "Évolution et Données brutes", "Sites FFVL", "Aide"])
                 else:
                     tab1, tab2, tab3, tab4 = st.tabs(["Résultats", "Données brutes", "Sites FFVL", "Aide"])
