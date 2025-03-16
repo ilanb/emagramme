@@ -1170,16 +1170,31 @@ def main():
     st.sidebar.header("Temps de prévision")
     
     # Déterminer la plage de temps disponible selon le modèle
-    if model.startswith("meteofrance_arome_france_hd"):
+    if model == "meteofrance_arome_france_hd":
         max_timestep = 36
         timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
                                     help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
         st.sidebar.info(f"AROME: prévisions disponibles jusqu'à H+{max_timestep}")
-    else:  # ARPEGE
+    elif model == "meteofrance_arpege_europe" or model == "meteofrance_arpege_world":
         max_timestep = 96
         timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
                                     help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
         st.sidebar.info(f"ARPÈGE: prévisions disponibles jusqu'à H+{max_timestep}")
+    elif model == "ecmwf_ifs04":
+        max_timestep = 144  # ECMWF propose généralement jusqu'à 144 heures (6 jours)
+        timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
+                                    help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
+        st.sidebar.info(f"ECMWF IFS: prévisions disponibles jusqu'à H+{max_timestep}")
+    elif model == "gfs_seamless":
+        max_timestep = 120  # GFS propose généralement jusqu'à 120 heures (5 jours) pour les données complètes
+        timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
+                                    help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
+        st.sidebar.info(f"GFS: prévisions disponibles jusqu'à H+{max_timestep}")
+    else:  # Valeur par défaut pour tout autre modèle
+        max_timestep = 72
+        timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
+                                    help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
+        st.sidebar.info(f"Modèle: prévisions disponibles jusqu'à H+{max_timestep}")
     
     # Convertir le timestep en jours et heures pour l'affichage
     days = timestep // 24
