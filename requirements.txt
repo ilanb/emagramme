@@ -29,3 +29,4 @@ openmeteo-requests
 plotly
 folium 
 streamlit-folium
+streamlit-geolocation

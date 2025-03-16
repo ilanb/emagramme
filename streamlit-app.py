@@ -14,6 +14,7 @@ import logging
 from datetime import datetime
 from retry_requests import retry
 import json
+from streamlit_geolocation import streamlit_geolocation
 
 # Importer les classes et fonctions du fichier principal
 from emagramme_analyzer import (
@@ -829,72 +830,28 @@ def show_glossary():
     4. **Vérifiez le vent** - Un vent fort en altitude peut rendre le vol difficile même avec de bons thermiques
     """)
 
-def get_location():
-    """
-    Fonction pour obtenir la géolocalisation en utilisant l'API HTML5 Geolocation
-    via un composant HTML personnalisé et une redirection avec paramètres.
-    """
-    # Vérifier si des coordonnées sont présentes dans les paramètres d'URL
-    query_params = dict(st.query_params)
-    
-    if "lat" in query_params and "lon" in query_params:
-        try:
-            lat = float(query_params["lat"])
-            lon = float(query_params["lon"])
-            
-            # Réinitialiser COMPLÈTEMENT les informations de géolocalisation
-            st.session_state.user_location = {
-                "latitude": lat,
-                "longitude": lon,
-                "altitude": alt,
-                "accuracy": accuracy,
-                "city": city,
-                "source": "GPS"  # Important: marquer la source comme GPS
-            }
+# Interface principale
+def main():
+    # Initialiser l'état de la géolocalisation
+    if 'geolocation_attempted' not in st.session_state:
+        st.session_state.geolocation_attempted = False
+        st.session_state.user_location = None
 
-            # Débogage
-            st.write("DEBUG: Coordonnées GPS obtenues")
-            st.write(f"Latitude: {lat}, Longitude: {lon}")
-            st.write(f"Altitude: {alt}, Précision: {accuracy}")
-            st.write(f"Ville: {city}")
+    # Section pour la géolocalisation
+    with st.expander("📱 Utiliser la géolocalisation de mon appareil", expanded=False):
+        st.info("Cette fonction utilise le GPS de votre appareil pour obtenir votre position précise.")
+        
+        # Utiliser streamlit_geolocation pour récupérer la position
+        location = streamlit_geolocation()
+        
+        if location and 'latitude' in location and 'longitude' in location:
+            # La géolocalisation a réussi, mettre à jour l'état de session
             
-            # Pour forcer l'affichage avant de continuer
-            st.stop()
-
-            # Récupérer l'altitude si présente
-            alt = 0
-            if "alt" in query_params and query_params["alt"] != "null":
-                try:
-                    alt = float(query_params["alt"])
-                except:
-                    pass
-            
-            # Récupérer la précision si présente
-            accuracy = 0
-            if "acc" in query_params and query_params["acc"] != "null":
-                try:
-                    accuracy = float(query_params["acc"])
-                except:
-                    pass
-            
-            # Si l'altitude n'est pas disponible, obtenir via API
-            if alt == 0:
-                try:
-                    elevation_response = requests.get(
-                        f"https://api.open-elevation.com/api/v1/lookup?locations={lat},{lon}",
-                        timeout=3
-                    )
-                    if elevation_response.status_code == 200:
-                        elevation_data = elevation_response.json()
-                        alt = elevation_data.get('results', [{}])[0].get('elevation', 500)
-                except:
-                    alt = 500  # Valeur par défaut
-            
-            # Obtenir le nom de la ville
+            # Tenter d'obtenir le nom de la ville
             city = "Position actuelle"
             try:
                 geocode_response = requests.get(
-                    f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=14",
+                    f"https://nominatim.openstreetmap.org/reverse?format=json&lat={location['latitude']}&lon={location['longitude']}&zoom=14",
                     headers={"User-Agent": "EmagrammeParapente/1.0"},
                     timeout=3
                 )
@@ -906,122 +863,132 @@ def get_location():
             except:
                 pass
             
+            # Si l'altitude n'est pas disponible, essayer de l'obtenir
+            altitude = location.get('altitude')
+            if not altitude:
+                try:
+                    elevation_response = requests.get(
+                        f"https://api.open-elevation.com/api/v1/lookup?locations={location['latitude']},{location['longitude']}",
+                        timeout=3
+                    )
+                    if elevation_response.status_code == 200:
+                        elevation_data = elevation_response.json()
+                        altitude = elevation_data.get('results', [{}])[0].get('elevation', 500)
+                    else:
+                        altitude = 500  # Valeur par défaut
+                except:
+                    altitude = 500  # Valeur par défaut
+            
+            # Mettre à jour les informations de localisation
             st.session_state.user_location = {
-                "latitude": lat,
-                "longitude": lon,
-                "altitude": alt,
+                "latitude": location['latitude'],
+                "longitude": location['longitude'],
+                "altitude": altitude,
+                "accuracy": location.get('accuracy', 0),
                 "city": city,
-                "accuracy": accuracy
+                "source": "GPS"
             }
-            
-            # Forcer la géolocalisation comme réussie et d'origine GPS
             st.session_state.geolocation_attempted = True
-            st.session_state.gps_used = True
             
-            # Nettoyer les paramètres d'URL
-            st.query_params.clear()
+            # Afficher les informations de localisation
+            st.success(f"Géolocalisation réussie ! Vous êtes à {city}")
             
-            return st.session_state.user_location
-        except Exception as e:
-            st.error(f"Erreur lors du traitement des données de localisation: {str(e)}")
-            st.query_params.clear()
-    
-    # Si pas de paramètres d'URL, afficher le composant de géolocalisation
-    geolocation_js = """
-    <script>
-    function getLocation() {
-        document.getElementById('statusMsg').innerText = 'Obtention de votre position...';
-        
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-                function(position) {
-                    // Succès - on a les coordonnées
-                    var latitude = position.coords.latitude;
-                    var longitude = position.coords.longitude;
-                    var accuracy = position.coords.accuracy;
-                    var altitude = position.coords.altitude;
-                    
-                    // Construire l'URL avec les paramètres
-                    var currentUrl = window.location.href.split('?')[0];
-                    var newUrl = currentUrl + '?lat=' + latitude + '&lon=' + longitude;
-                    
-                    if (altitude !== null) {
-                        newUrl += '&alt=' + altitude;
-                    } else {
-                        newUrl += '&alt=null';
-                    }
-                    
-                    newUrl += '&acc=' + accuracy;
-                    
-                    document.getElementById('statusMsg').innerHTML = 'Position obtenue ! Redirection...';
-                    
-                    // Rediriger vers la nouvelle URL
-                    window.location.href = newUrl;
-                },
-                function(error) {
-                    // Erreur - gérer les différents cas
-                    var errorMessage = '';
-                    switch(error.code) {
-                        case error.PERMISSION_DENIED:
-                            errorMessage = "Vous avez refusé l'accès à votre position.";
-                            break;
-                        case error.POSITION_UNAVAILABLE:
-                            errorMessage = "Votre position n'est pas disponible.";
-                            break;
-                        case error.TIMEOUT:
-                            errorMessage = "La demande de géolocalisation a expiré.";
-                            break;
-                        case error.UNKNOWN_ERROR:
-                            errorMessage = "Une erreur inconnue s'est produite.";
-                            break;
-                    }
-                    document.getElementById('statusMsg').innerHTML = '<span style="color:red">Erreur : </span>' + errorMessage;
-                },
-                {
-                    // Options pour la géolocalisation
-                    enableHighAccuracy: true,  // Haute précision (important pour le parapente)
-                    timeout: 10000,            // 10 secondes de timeout
-                    maximumAge: 0              // Pas de cache
-                }
-            );
-        } else {
-            // Géolocalisation non supportée
-            document.getElementById('statusMsg').innerHTML = '<span style="color:red">Erreur : </span>Votre navigateur ne supporte pas la géolocalisation.';
-        }
-    }
-    </script>
-    
-    <div style="text-align: center; padding: 10px; margin: 10px 0;">
-        <button onclick="getLocation()" style="background-color: #4CAF50; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;">
-            📱 Partager ma position GPS
-        </button>
-        <p id="statusMsg" style="margin-top: 10px; font-style: italic;">
-            Cliquez sur le bouton pour partager votre position précise
-        </p>
-    </div>
-    """
-    
-    import streamlit.components.v1 as components
-    
-    # Afficher le composant HTML pour la géolocalisation
-    components.html(geolocation_js, height=120)
-    
-    return None
-    
-# Interface principale
-def main():
-    if 'gps_used' not in st.session_state:
-        st.session_state.gps_used = False
-    # Initialiser l'état de la géolocalisation
-    if 'geolocation_attempted' not in st.session_state:
-        st.session_state.geolocation_attempted = False
-        st.session_state.user_location = None
+            # Afficher les coordonnées et l'altitude
+            col1, col2 = st.columns(2)
+            with col1:
+                if location['latitude'] is not None:
+                    st.write(f"**Latitude:** {location['latitude']:.6f}")
+                else:
+                    st.write("**Latitude:** Non disponible")
+                
+                if location['longitude'] is not None:
+                    st.write(f"**Longitude:** {location['longitude']:.6f}")
+                else:
+                    st.write("**Longitude:** Non disponible")
 
-    if st.sidebar.checkbox("Je découvre la météo aérologique"):
-        st.sidebar.info("Tutoriel activé - vous verrez des explications supplémentaires")
-        st.session_state.tutorial_mode = True
-    else:
-        st.session_state.tutorial_mode = False
+            with col2:
+                if altitude is not None:
+                    st.write(f"**Altitude:** {altitude:.0f} m")
+                else:
+                    st.write("**Altitude:** Non disponible")
+                
+                accuracy = location.get('accuracy', 0)
+                if accuracy is not None:
+                    st.write(f"**Précision:** ±{accuracy:.0f} m")
+                else:
+                    st.write("**Précision:** Non disponible")
+            
+            # Afficher une carte avec la position
+            import folium
+            from streamlit_folium import folium_static
+            
+            if location['latitude'] is not None and location['longitude'] is not None:
+                m = folium.Map(location=[location['latitude'], location['longitude']], zoom_start=13)
+                
+                folium.Marker(
+                    [location['latitude'], location['longitude']],
+                    popup=f"Votre position<br>Altitude: {altitude if altitude is not None else 'Non disponible'} m",
+                    icon=folium.Icon(color="red", icon="info-sign")
+                ).add_to(m)
+                
+                accuracy = location.get('accuracy', 0)
+                if accuracy is not None and accuracy > 0:
+                    folium.Circle(
+                        radius=accuracy,
+                        location=[location['latitude'], location['longitude']],
+                        popup="Précision",
+                        color="#3186cc",
+                        fill=True,
+                        fill_color="#3186cc"
+                    ).add_to(m)
+                
+                st.subheader("Votre position")
+                folium_static(m)
+            
+            # Bouton pour utiliser cette position dans l'application
+            if st.button("Analyser l'émagramme à cette position"):
+                if location['latitude'] is not None and location['longitude'] is not None:
+                    st.session_state.site_selection = {
+                        "latitude": location["latitude"],
+                        "longitude": location["longitude"],
+                        "altitude": altitude if altitude is not None else 500,  # Valeur par défaut si None
+                        "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
+                    }
+                    st.session_state.run_analysis = True
+                    st.rerun()
+                else:
+                    st.error("Coordonnées GPS non disponibles. Veuillez réessayer.")
+
+    # Si la géolocalisation GPS a réussi, afficher un bouton dans la sidebar
+    if st.session_state.user_location and st.session_state.geolocation_attempted and st.session_state.user_location.get("source") == "GPS":
+        accuracy_info = ""
+        if "accuracy" in st.session_state.user_location:
+            accuracy_info = f" (précision: ±{st.session_state.user_location['accuracy']:.0f}m)"
+        
+        st.sidebar.success(f"📱 Géolocalisation précise: {st.session_state.user_location['city']}{accuracy_info}")
+        
+        # Bouton pour utiliser la position géolocalisée
+        if st.sidebar.button("Utiliser ma position GPS"):
+            st.session_state.site_selection = {
+                "latitude": st.session_state.user_location["latitude"],
+                "longitude": st.session_state.user_location["longitude"],
+                "altitude": st.session_state.user_location["altitude"],
+                "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
+            }
+            st.session_state.run_analysis = True
+            st.rerun()
+    # Si aucune géolocalisation n'a été tentée, proposer la géolocalisation par IP
+    elif not st.session_state.geolocation_attempted:
+        st.info("📱 Pour une localisation plus précise, utilisez l'option 'Utiliser la géolocalisation de mon appareil'.")
+        
+        col1, col2 = st.columns([1, 1])
+        with col2:
+            if st.button("🌐 Utiliser la géolocalisation par IP"):
+                with st.spinner("Tentative de géolocalisation par IP..."):
+                    user_location = get_user_location()
+                    st.session_state.user_location = user_location
+                    st.session_state.geolocation_attempted = True
+                    st.rerun()
 
     # Dans le corps principal de l'application
     if st.session_state.get("tutorial_mode", False):
@@ -1046,109 +1013,6 @@ def main():
         🟡 **Jaune** - Conditions acceptables avec précautions
         🔴 **Rouge** - Conditions défavorables ou dangereuses
         """)
-
-
-    # Section pour la géolocalisation mobile
-    with st.expander("📱 Utiliser la géolocalisation de mon appareil", expanded=False):
-        st.info("Cette fonction utilise le GPS de votre appareil pour obtenir votre position précise.")
-        
-        location = get_location()
-        
-        if location and location.get("success", False):
-            # Afficher les informations de localisation
-            st.success(f"Géolocalisation réussie ! Vous êtes à {location['city']}")
-            
-            # Afficher les coordonnées et l'altitude
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**Latitude:** {location['latitude']:.6f}")
-                st.write(f"**Longitude:** {location['longitude']:.6f}")
-            with col2:
-                st.write(f"**Altitude:** {location['altitude']:.0f} m")
-                st.write(f"**Précision:** ±{location['accuracy']:.0f} m")
-            
-            # Afficher une carte avec la position
-            m = folium.Map(location=[location['latitude'], location['longitude']], zoom_start=13)
-            folium.Marker(
-                [location['latitude'], location['longitude']],
-                popup=f"Votre position<br>Altitude: {location['altitude']}m",
-                icon=folium.Icon(color="red", icon="info-sign")
-            ).add_to(m)
-            
-            if location['accuracy'] > 0:
-                folium.Circle(
-                    radius=location['accuracy'],
-                    location=[location['latitude'], location['longitude']],
-                    popup="Précision",
-                    color="#3186cc",
-                    fill=True,
-                    fill_color="#3186cc"
-                ).add_to(m)
-            
-            st.subheader("Votre position")
-            folium_static(m)
-            
-            # Bouton pour utiliser cette position dans l'application
-            if st.button("Analyser l'émagramme à cette position"):
-                st.session_state.site_selection = {
-                    "latitude": location["latitude"],
-                    "longitude": location["longitude"],
-                    "altitude": location["altitude"],
-                    "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
-                }
-                st.session_state.user_location = location
-                st.session_state.geolocation_attempted = True
-                st.session_state.run_analysis = True
-                st.rerun()
-
-    # Proposer la géolocalisation matérielle (appareil mobile) si non tentée
-    if not st.session_state.geolocation_attempted:
-        st.info("📱 Pour une localisation plus précise, vous pouvez utiliser la géolocalisation de votre appareil.")
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            pass
-        
-        with col2:
-            if st.button("🌐 Utiliser la géolocalisation par IP"):
-                with st.spinner("Tentative de géolocalisation par IP..."):
-                    user_location = get_user_location()
-                    st.session_state.user_location = user_location
-                    st.session_state.geolocation_attempted = True
-                    st.rerun()
-
-    if location and location.get("success", False):
-        st.session_state.user_location = location
-        st.session_state.geolocation_attempted = True
-    else:
-        # Tenter la géolocalisation par IP seulement si la géolocalisation GPS a échoué
-        with st.spinner("Tentative de géolocalisation par IP..."):
-            user_location = get_user_location()
-            st.session_state.user_location = user_location
-            st.session_state.geolocation_attempted = True
-    
-    if st.session_state.user_location and st.session_state.geolocation_attempted:
-        accuracy_info = ""
-        if "accuracy" in st.session_state.user_location:
-            accuracy_info = f" (précision: ±{st.session_state.user_location['accuracy']:.0f}m)"
-        
-        location_type = "📱 Géolocalisation précise" if "accuracy" in st.session_state.user_location else "🌐 Géolocalisé par IP"
-        st.sidebar.success(f"{location_type}: {st.session_state.user_location['city']}{accuracy_info}")
-        
-        # Bouton pour utiliser la position géolocalisée
-        if st.sidebar.button("Utiliser ma position actuelle"):
-            if st.session_state.user_location:
-                source_text = "GPS" if st.session_state.get("gps_used", False) else "IP"
-                st.sidebar.info(f"Utilisation des coordonnées obtenues par {source_text}")
-                
-                st.session_state.site_selection = {
-                    "latitude": st.session_state.user_location["latitude"],
-                    "longitude": st.session_state.user_location["longitude"],
-                    "altitude": st.session_state.user_location["altitude"],
-                    "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
-                }
-                st.session_state.run_analysis = True
-                st.rerun()
     
     # Initialiser l'état de session si nécessaire
     if 'site_selection' not in st.session_state:
