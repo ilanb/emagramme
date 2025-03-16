@@ -840,8 +840,10 @@ def main():
         st.session_state.geolocation_attempted = False
         st.session_state.user_location = None
 
-    # Section pour la géolocalisation
-    with st.expander("📱 Utiliser la géolocalisation de mon appareil", expanded=False):
+    # Vérification de la géolocalisation (exemple avec un bouton)
+    expander_message = "‼️ IMPORTANT Géolocalisez-vous !" if not st.session_state.geolocation_attempted else "✅ Géolocalisation réussie !"
+    with st.sidebar.expander(expander_message, expanded=not st.session_state.geolocation_attempted):
+
         st.info("Cette fonction utilise le GPS de votre appareil pour obtenir votre position précise.")
         
         # Utiliser streamlit_geolocation pour récupérer la position
@@ -1051,7 +1053,7 @@ def main():
     st.sidebar.header("Configuration")
     
     # Section pour la source des données
-    st.sidebar.header("Source des données")
+    st.sidebar.subheader("Source des données")
     data_source = st.sidebar.radio(
         "Sélectionnez une source de données",
         options=["Open-Meteo (sans clé API)"],
@@ -1253,7 +1255,7 @@ def main():
                                       
     
     # Section pour la recherche de décollages proches
-    with st.expander("🪂 Recherche de décollages proches", expanded=False):
+    with st.expander("🪂 Recherche de décollages proches FFVL", expanded=False):
         search_radius = st.slider(
             "Rayon de recherche (km)", 
             min_value=5, 
@@ -1327,59 +1329,6 @@ def main():
             else:
                 st.warning("Aucun site de vol trouvé à proximité")
                 st.info("Essayez d'augmenter le rayon de recherche ou de vérifier votre position")
-
-    # Ajouter la possibilité de recherche par nom de lieu
-    with st.expander("🔍 Rechercher un lieu"):
-        search_query = st.text_input("Nom du lieu (ville, montagne, site de vol...)")
-        search_button = st.button("Rechercher")
-        
-        if search_button and search_query:
-            try:
-                with st.spinner(f"Recherche de {search_query}..."):
-                    # Utiliser Nominatim (OpenStreetMap) pour la recherche de lieux
-                    search_url = f"https://nominatim.openstreetmap.org/search?q={search_query}&format=json&limit=5"
-                    response = requests.get(search_url, headers={"User-Agent": "EmagrammeParapente/1.0"})
-                    
-                    if response.status_code == 200:
-                        results = response.json()
-                        if results:
-                            # Créer un tableau pour afficher les résultats
-                            st.write("Résultats de recherche:")
-                            
-                            for i, result in enumerate(results):
-                                col1, col2 = st.columns([3, 1])
-                                with col1:
-                                    st.write(f"{result.get('display_name', 'Lieu inconnu')}")
-                                with col2:
-                                    if st.button(f"Sélectionner", key=f"select_{i}"):
-                                        lat = float(result.get('lat', 0))
-                                        lon = float(result.get('lon', 0))
-                                        
-                                        # Tenter d'obtenir l'altitude via une API d'élévation
-                                        try:
-                                            elev_url = f"https://api.open-elevation.com/api/v1/lookup?locations={lat},{lon}"
-                                            elev_response = requests.get(elev_url, timeout=3)
-                                            if elev_response.status_code == 200:
-                                                elev_data = elev_response.json()
-                                                altitude = elev_data.get('results', [{}])[0].get('elevation', 500)
-                                            else:
-                                                altitude = 500
-                                        except:
-                                            altitude = 500
-                                        
-                                        st.session_state.site_selection = {
-                                            "latitude": lat,
-                                            "longitude": lon,
-                                            "altitude": altitude,
-                                            "model": st.session_state.site_selection["model"]
-                                        }
-                                        st.rerun()
-                        else:
-                            st.warning("Aucun résultat trouvé")
-                    else:
-                        st.error("Erreur lors de la recherche")
-            except Exception as e:
-                st.error(f"Erreur: {e}")
 
     # Bouton pour lancer l'analyse (IMPORTANT: définir 'analyze_clicked' AVANT de l'utiliser)
     main_analyze_clicked = st.button("Analyser l'émagramme")
