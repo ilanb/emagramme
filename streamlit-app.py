@@ -887,6 +887,14 @@ def get_location():
             except:
                 pass
             
+            st.session_state.user_location = {
+                "latitude": lat,
+                "longitude": lon,
+                "altitude": alt,
+                "city": city,
+                "accuracy": accuracy
+            }
+            
             # Nettoyer les paramètres d'URL pour les enlever de l'adresse après utilisation
             st.query_params.clear()
             
@@ -1091,9 +1099,12 @@ def main():
                     st.session_state.geolocation_attempted = True
                     st.rerun()
 
-    # Tenter la géolocalisation automatique au premier chargement de la page
-    if not st.session_state.geolocation_attempted:
-        with st.spinner("Tentative de géolocalisation..."):
+    if location and location.get("success", False):
+        st.session_state.user_location = location
+        st.session_state.geolocation_attempted = True
+    else:
+        # Tenter la géolocalisation par IP seulement si la géolocalisation GPS a échoué
+        with st.spinner("Tentative de géolocalisation par IP..."):
             user_location = get_user_location()
             st.session_state.user_location = user_location
             st.session_state.geolocation_attempted = True
