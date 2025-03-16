@@ -1485,21 +1485,22 @@ def main():
                     st.info(f"**Stratégie recommandée**: {air_movement['recommendation']}")
 
                     # Vérifier d'abord si le vol est impossible
-                    vol_impossible = (analysis.precipitation_type is not None and analysis.precipitation_type != 0) or \
-                                    (hasattr(analyzer, 'wind_speeds') and analyzer.wind_speeds is not None and \
-                                    np.nanmax(analyzer.wind_speeds) > 25)
-                    
+                    vol_impossible = (analysis.precipitation_type is not None and analysis.precipitation_type != 0)
+
+                    # Vérifier si le vent dans la zone de vol est trop fort (déjà calculé dans l'analyseur)
+                    if hasattr(analyzer, 'vol_impossible_wind') and analyzer.vol_impossible_wind:
+                        vol_impossible = True
+                        raisons = [f"Vent trop fort dans la zone de vol ({analyzer.max_wind_in_vol_zone:.1f} km/h)"]
+                    elif (analysis.precipitation_type is not None and analysis.precipitation_type != 0):
+                        raisons = [analysis.precipitation_description]
+                    else:
+                        raisons = []
+
                     if vol_impossible:
                         # Utiliser un style d'alerte visuelle différent
                         st.error("⚠️ VOL IMPOSSIBLE - Conditions météorologiques dangereuses")
                         
                         # Afficher la raison principale
-                        raisons = []
-                        if analysis.precipitation_type is not None and analysis.precipitation_type != 0:
-                            raisons.append(analysis.precipitation_description)
-                        if hasattr(analyzer, 'wind_speeds') and analyzer.wind_speeds is not None and np.nanmax(analyzer.wind_speeds) > 25:
-                            raisons.append(f"Vent trop fort (max {np.nanmax(analyzer.wind_speeds):.1f} km/h)")
-                        
                         st.error(f"Raison: {', '.join(raisons)}")
                         
                         # Limiter ce qui est affiché dans l'interface
@@ -1527,6 +1528,8 @@ def main():
                                 forecast_time = f" - Prévision pour J+{days}, {remaining_hours}h"
                             else:
                                 forecast_time = f" - Prévision pour H+{hour}"
+                                
+                        model_name = analysis.model_name if hasattr(analysis, 'model_name') and analysis.model_name else "inconnu"
                         st.info(f"Modèle météo utilisé: {model_name.upper()}{forecast_time}")
 
                         col1, col2, col3 = st.columns(3)

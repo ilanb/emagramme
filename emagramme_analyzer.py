@@ -529,10 +529,15 @@ class EmagrammeAnalyzer:
             Description des conditions de vol
         """
         conditions = []
-        
+
         # Vérifier immédiatement si des précipitations sont prévues
         if analysis.precipitation_type is not None and analysis.precipitation_type != 0:
             conditions.append(f"\n\n⚠️ VOL IMPOSSIBLE - {analysis.precipitation_description} prévue. Le vol en parapente est dangereux et déconseillé en présence de précipitations.")
+            return " ".join(conditions)
+        
+        # Vérifier si le vent est trop fort UNIQUEMENT dans la zone de vol
+        if hasattr(self, 'vol_impossible_wind') and self.vol_impossible_wind:
+            conditions.append(f"\n\n⚠️ VOL IMPOSSIBLE - Vent trop fort dans la zone de vol ({self.max_wind_in_vol_zone:.1f} km/h)")
             return " ".join(conditions)
         
         # Conditions thermiques
@@ -611,18 +616,6 @@ class EmagrammeAnalyzer:
         # Ajouter des informations sur les précipitations
         if analysis.precipitation_type is not None and analysis.precipitation_type != 0:
             conditions.append(f"\n\nPrécipitations: {analysis.precipitation_description}")
-
-        # Type de thermiques
-        if analysis.thermal_type == "Bleu":
-            conditions.append("\n\nThermiques bleus sans marquage nuageux")
-        else:
-            cloud_thickness = analysis.cloud_top - analysis.cloud_base
-            if cloud_thickness < 500:
-                conditions.append("\n\nPetits cumulus peu développés")
-            elif cloud_thickness < 1000:
-                conditions.append("\n\nCumulus bien formés")
-            else:
-                conditions.append("\n\nCumulus bien développés, risque de surdéveloppement")
         
         # Plafond
         if analysis.thermal_ceiling < 1500:
@@ -718,7 +711,7 @@ class EmagrammeAnalyzer:
 
     def _identify_hazards(self, analysis: EmagrammeAnalysis) -> List[str]:
         """
-        Identifie les dangers potentiels pour le vol
+        Identifie les dangers potentiels pour le vol en se concentrant sur la zone de vol
         
         Args:
             analysis: Résultats de l'analyse de l'émagramme
@@ -766,13 +759,14 @@ class EmagrammeAnalyzer:
         if thermal_ceiling_temp < 0:
             hazards.append(f"Températures négatives au plafond ({thermal_ceiling_temp:.1f}°C), risque de froid")
         
-        # Problèmes de vent
-        # Vérification des vents forts en utilisant la description textuelle
-        if "fort" in analysis.wind_conditions.lower():
-            hazards.append("Vents forts en altitude, risque de dérive importante")
-        
-        if "gradient" in analysis.wind_conditions.lower() and "fort" in analysis.wind_conditions.lower():
-            hazards.append("Fort gradient de vent, risque de cisaillement")
+        # Utiliser les données de vent de la zone de vol
+        if hasattr(self, 'max_wind_in_vol_zone') and self.max_wind_in_vol_zone:
+            max_wind = self.max_wind_in_vol_zone
+            
+            if max_wind > 25 and max_wind <= 35:
+                hazards.append(f"Vent soutenu dans la zone de vol ({max_wind:.1f} km/h), vol réservé aux pilotes confirmés")
+            elif max_wind > 20:
+                hazards.append(f"Vent modéré dans la zone de vol ({max_wind:.1f} km/h), vigilance recommandée")
         
         # Inversions problématiques
         if analysis.inversion_layers:
@@ -863,7 +857,7 @@ class EmagrammeAnalyzer:
                 thermal_inconsistency = "Incohérence détectée: l'analyse des courbes indique des thermiques bleus, " \
                                     "mais la prévision indique une couverture nuageuse significative. " \
                                     "\nIl s'agit probablement de nuages stratiformes non liés à l'activité thermique."
-    
+        
         
         if condensation_level and condensation_level < thermal_ceiling:
             # Le thermique condense avant d'atteindre son plafond
@@ -911,7 +905,7 @@ class EmagrammeAnalyzer:
             thermal_type=thermal_type,
             thermal_gradient=thermal_gradient,
             inversion_layers=inversion_layers,
-            thermal_inconsistency=thermal_inconsistency,  # Nouvel attribut
+            thermal_inconsistency=thermal_inconsistency,
             flight_conditions="",  # Sera rempli ci-dessous
             wind_conditions="",  # Sera rempli ci-dessous
             hazards=[],  # Sera rempli ci-dessous
@@ -929,6 +923,31 @@ class EmagrammeAnalyzer:
             analysis.precipitation_type = self.precip_info.get('type')
             analysis.precipitation_description = self.precip_info.get('description')
         
+        # AJOUTEZ CE CODE ICI - Début
+        # Définir la zone de vol en parapente
+        vol_min_alt = analysis.ground_altitude
+        vol_max_alt = min(analysis.thermal_ceiling + 200, cloud_base if cloud_base else 6000)
+        
+        # Ajouter ces informations à l'objet analyzer pour qu'elles soient accessibles ailleurs
+        self.vol_min_alt = vol_min_alt
+        self.vol_max_alt = vol_max_alt
+        
+        # Trouver les indices correspondants dans self.altitudes
+        vol_alt_indices = [i for i, alt in enumerate(self.altitudes) 
+                        if vol_min_alt <= alt <= vol_max_alt]
+        
+        # Vérifier le vent seulement dans cette zone
+        self.vol_impossible_wind = False
+        self.max_wind_in_vol_zone = 0
+        
+        if self.wind_speeds is not None and len(vol_alt_indices) > 0:
+            vol_wind_speeds = self.wind_speeds[vol_alt_indices]
+            self.max_wind_in_vol_zone = np.nanmax(vol_wind_speeds)
+            
+            # Vérifier si le vent est trop fort pour voler
+            if self.max_wind_in_vol_zone > 35:  # 35 km/h est souvent un seuil critique
+                self.vol_impossible_wind = True
+
         # Compléter l'analyse
         analysis.flight_conditions = self._describe_flight_conditions(analysis)
         analysis.wind_conditions = self._evaluate_wind_conditions()
@@ -943,12 +962,10 @@ class EmagrammeAnalyzer:
         analysis.spread_levels = spread_data["levels"]
         analysis.spread_analysis = spread_data["analysis"]
 
-
         # Analyser les couches atmosphériques
         layer_analysis = self._analyze_atmospheric_layers(thermal_ceiling)
         
-        # Stocker cette analyse dans l'objet d'analyse 
-        # (vous devrez ajouter un attribut pour cela dans la classe EmagrammeAnalysis)
+        # Stocker cette analyse dans l'objet d'analyse
         analysis.atmospheric_layers = layer_analysis
 
         return analysis
