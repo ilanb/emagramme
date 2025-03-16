@@ -612,7 +612,7 @@ def create_evolution_plots(evolution_data, site_altitude):
     # Convertir en pourcentage
     df["vol_score"] = (df["vol_score"] * 100).round(1)
     
-    # Graphique des scores de vol
+    # Graphique des scores de vol - Utiliser toutes les données disponibles
     fig_score = px.bar(df, x="time_str", y="vol_score",
                      labels={"vol_score": "Score (%)", "time_str": "Date/Heure"},
                      title="Évaluation des conditions de vol",
@@ -634,9 +634,11 @@ def create_evolution_plots(evolution_data, site_altitude):
         "wind": 0
     }
     
-    # Trouver la meilleure période (gérer le cas où df est vide)
+    # Trouver la meilleure période sur TOUTE la plage de données
+    # (et non pas seulement sur la plage affichée)
     if not df.empty and len(df["vol_score"]) > 0:
         try:
+            # MODIFICATION ICI: Utiliser toutes les données pour trouver le meilleur score
             best_index = df["vol_score"].idxmax()
             best_time = df.loc[best_index, "time_str"]
             best_score = df.loc[best_index, "vol_score"]
@@ -1588,7 +1590,7 @@ def main():
                 if fetch_evolution_enabled and evolution_data and "tab2" in locals():
                     with tab2:
                         st.header("Évolution des conditions sur la période")
-                        st.info(f"Ce graphique montre l'évolution des conditions météorologiques depuis l'heure actuelle jusqu'à la prévision H+{timestep}.")
+                        st.info(f"La meilleure période a été calculée sur la plage de H+0 à H+{timestep}.")
 
                         # Créer tous les graphiques d'évolution
                         with st.spinner("Génération des graphiques d'évolution..."):
