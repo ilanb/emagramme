@@ -829,112 +829,160 @@ def show_glossary():
     4. **Vérifiez le vent** - Un vent fort en altitude peut rendre le vol difficile même avec de bons thermiques
     """)
 
-def get_device_geolocation():
+def get_location():
     """
-    Utilise l'API Geolocation du navigateur via un composant HTML personnalisé
-    pour obtenir la position précise de l'appareil.
+    Fonction pour obtenir la géolocalisation en utilisant l'API HTML5 Geolocation
+    via un composant HTML personnalisé et une redirection avec paramètres.
     """
-    # Créer un composant HTML avec le code JavaScript nécessaire
-    geolocation_html = """
+    # Vérifier si des coordonnées sont présentes dans les paramètres d'URL
+    query_params = dict(st.query_params)
+    
+    if "lat" in query_params and "lon" in query_params:
+        try:
+            lat = float(query_params["lat"])
+            lon = float(query_params["lon"])
+            
+            # Récupérer l'altitude si présente
+            alt = 0
+            if "alt" in query_params and query_params["alt"] != "null":
+                try:
+                    alt = float(query_params["alt"])
+                except:
+                    pass
+            
+            # Récupérer la précision si présente
+            accuracy = 0
+            if "acc" in query_params and query_params["acc"] != "null":
+                try:
+                    accuracy = float(query_params["acc"])
+                except:
+                    pass
+            
+            # Si l'altitude n'est pas disponible, obtenir via API
+            if alt == 0:
+                try:
+                    elevation_response = requests.get(
+                        f"https://api.open-elevation.com/api/v1/lookup?locations={lat},{lon}",
+                        timeout=3
+                    )
+                    if elevation_response.status_code == 200:
+                        elevation_data = elevation_response.json()
+                        alt = elevation_data.get('results', [{}])[0].get('elevation', 500)
+                except:
+                    alt = 500  # Valeur par défaut
+            
+            # Obtenir le nom de la ville
+            city = "Position actuelle"
+            try:
+                geocode_response = requests.get(
+                    f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=14",
+                    headers={"User-Agent": "EmagrammeParapente/1.0"},
+                    timeout=3
+                )
+                if geocode_response.status_code == 200:
+                    geocode_data = geocode_response.json()
+                    city = geocode_data.get('address', {}).get('city', 
+                          geocode_data.get('address', {}).get('town', 
+                          geocode_data.get('address', {}).get('village', "Lieu inconnu")))
+            except:
+                pass
+            
+            # Nettoyer les paramètres d'URL pour les enlever de l'adresse après utilisation
+            st.query_params.clear()
+            
+            return {
+                "latitude": lat,
+                "longitude": lon,
+                "altitude": alt,
+                "accuracy": accuracy,
+                "city": city,
+                "success": True
+            }
+        except Exception as e:
+            st.error(f"Erreur lors du traitement des données de localisation: {str(e)}")
+            st.query_params.clear()
+    
+    # Si pas de paramètres d'URL, afficher le composant de géolocalisation
+    geolocation_js = """
     <script>
-    // Fonction pour obtenir la position et la transmettre à Streamlit
     function getLocation() {
+        document.getElementById('statusMsg').innerText = 'Obtention de votre position...';
+        
         if (navigator.geolocation) {
-            document.getElementById('geolocation_status').innerHTML = 'Demande de géolocalisation en cours...';
             navigator.geolocation.getCurrentPosition(
                 function(position) {
-                    // Succès : on a les coordonnées
-                    var lat = position.coords.latitude;
-                    var lon = position.coords.longitude;
+                    // Succès - on a les coordonnées
+                    var latitude = position.coords.latitude;
+                    var longitude = position.coords.longitude;
                     var accuracy = position.coords.accuracy;
-                    var altitude = position.coords.altitude || 0;
-                    var altitudeAccuracy = position.coords.altitudeAccuracy || 0;
+                    var altitude = position.coords.altitude;
                     
-                    // Créer une chaîne de données formatée pour Streamlit
-                    var locationData = {
-                        "latitude": lat,
-                        "longitude": lon,
-                        "accuracy": accuracy,
-                        "altitude": altitude,
-                        "altitudeAccuracy": altitudeAccuracy,
-                        "success": true
-                    };
+                    // Construire l'URL avec les paramètres
+                    var currentUrl = window.location.href.split('?')[0];
+                    var newUrl = currentUrl + '?lat=' + latitude + '&lon=' + longitude;
                     
-                    // Transmettre à Streamlit via le mécanisme de communication
-                    Streamlit.setComponentValue(locationData);
-                    document.getElementById('geolocation_status').innerHTML = 'Position obtenue avec succès!';
+                    if (altitude !== null) {
+                        newUrl += '&alt=' + altitude;
+                    } else {
+                        newUrl += '&alt=null';
+                    }
+                    
+                    newUrl += '&acc=' + accuracy;
+                    
+                    document.getElementById('statusMsg').innerHTML = 'Position obtenue ! Redirection...';
+                    
+                    // Rediriger vers la nouvelle URL
+                    window.location.href = newUrl;
                 },
                 function(error) {
-                    // Erreur : informer l'utilisateur du problème
-                    var errorMsg = '';
+                    // Erreur - gérer les différents cas
+                    var errorMessage = '';
                     switch(error.code) {
                         case error.PERMISSION_DENIED:
-                            errorMsg = "Vous avez refusé la demande de géolocalisation.";
+                            errorMessage = "Vous avez refusé l'accès à votre position.";
                             break;
                         case error.POSITION_UNAVAILABLE:
-                            errorMsg = "Les informations de localisation ne sont pas disponibles.";
+                            errorMessage = "Votre position n'est pas disponible.";
                             break;
                         case error.TIMEOUT:
-                            errorMsg = "La demande de localisation a expiré.";
+                            errorMessage = "La demande de géolocalisation a expiré.";
                             break;
                         case error.UNKNOWN_ERROR:
-                            errorMsg = "Une erreur inconnue s'est produite.";
+                            errorMessage = "Une erreur inconnue s'est produite.";
                             break;
                     }
-                    document.getElementById('geolocation_status').innerHTML = 'Erreur: ' + errorMsg;
-                    Streamlit.setComponentValue({"success": false, "error": errorMsg});
+                    document.getElementById('statusMsg').innerHTML = '<span style="color:red">Erreur : </span>' + errorMessage;
                 },
                 {
-                    enableHighAccuracy: true,
-                    timeout: 10000,
-                    maximumAge: 0
+                    // Options pour la géolocalisation
+                    enableHighAccuracy: true,  // Haute précision (important pour le parapente)
+                    timeout: 10000,            // 10 secondes de timeout
+                    maximumAge: 0              // Pas de cache
                 }
             );
         } else {
-            document.getElementById('geolocation_status').innerHTML = 'La géolocalisation n\'est pas prise en charge par ce navigateur.';
-            Streamlit.setComponentValue({"success": false, "error": "Géolocalisation non supportée"});
+            // Géolocalisation non supportée
+            document.getElementById('statusMsg').innerHTML = '<span style="color:red">Erreur : </span>Votre navigateur ne supporte pas la géolocalisation.';
         }
     }
-    
-    // Exécuter la fonction de géolocalisation dès que le composant est prêt
-    // Attendre que Streamlit soit initialisé
-    if (window.Streamlit) {
-        getLocation();
-    } else {
-        window.addEventListener('load', function() {
-            // Réécrire cette fonction pour qu'elle soit compatible avec l'API Streamlit
-            window.Streamlit.componentReady().then(function() {
-                getLocation();
-            });
-        });
-    }
     </script>
-    <div>
-        <p id="geolocation_status">En attente de permission de géolocalisation...</p>
-        <button onclick="getLocation()" style="background-color: #4CAF50; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">
-            Autoriser la géolocalisation
+    
+    <div style="text-align: center; padding: 10px; margin: 10px 0;">
+        <button onclick="getLocation()" style="background-color: #4CAF50; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;">
+            📱 Partager ma position GPS
         </button>
+        <p id="statusMsg" style="margin-top: 10px; font-style: italic;">
+            Cliquez sur le bouton pour partager votre position précise
+        </p>
     </div>
     """
     
-    # Utiliser components.html pour injecter le code JavaScript
-    try:
-        import streamlit.components.v1 as components
-        geolocation_data = components.html(geolocation_html, height=100, width=400)
-        
-        # Si des données ont été renvoyées, les traiter
-        if geolocation_data and isinstance(geolocation_data, dict) and geolocation_data.get("success", False):
-            return {
-                "latitude": geolocation_data["latitude"],
-                "longitude": geolocation_data["longitude"],
-                "altitude": geolocation_data.get("altitude", 0),
-                "accuracy": geolocation_data.get("accuracy", 0),
-                "altitudeAccuracy": geolocation_data.get("altitudeAccuracy", 0)
-            }
-        return None
-    except Exception as e:
-        logging.error(f"Erreur lors de la géolocalisation matérielle: {e}")
-        return None
+    import streamlit.components.v1 as components
+    
+    # Afficher le composant HTML pour la géolocalisation
+    components.html(geolocation_js, height=120)
+    
+    return None
     
 # Interface principale
 def main():
@@ -973,68 +1021,67 @@ def main():
         🔴 **Rouge** - Conditions défavorables ou dangereuses
         """)
 
+
+    # Section pour la géolocalisation mobile
+    with st.expander("📱 Utiliser la géolocalisation de mon appareil", expanded=False):
+        st.info("Cette fonction utilise le GPS de votre appareil pour obtenir votre position précise.")
+        
+        location = get_location()
+        
+        if location and location.get("success", False):
+            # Afficher les informations de localisation
+            st.success(f"Géolocalisation réussie ! Vous êtes à {location['city']}")
+            
+            # Afficher les coordonnées et l'altitude
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"**Latitude:** {location['latitude']:.6f}")
+                st.write(f"**Longitude:** {location['longitude']:.6f}")
+            with col2:
+                st.write(f"**Altitude:** {location['altitude']:.0f} m")
+                st.write(f"**Précision:** ±{location['accuracy']:.0f} m")
+            
+            # Afficher une carte avec la position
+            m = folium.Map(location=[location['latitude'], location['longitude']], zoom_start=13)
+            folium.Marker(
+                [location['latitude'], location['longitude']],
+                popup=f"Votre position<br>Altitude: {location['altitude']}m",
+                icon=folium.Icon(color="red", icon="info-sign")
+            ).add_to(m)
+            
+            if location['accuracy'] > 0:
+                folium.Circle(
+                    radius=location['accuracy'],
+                    location=[location['latitude'], location['longitude']],
+                    popup="Précision",
+                    color="#3186cc",
+                    fill=True,
+                    fill_color="#3186cc"
+                ).add_to(m)
+            
+            st.subheader("Votre position")
+            folium_static(m)
+            
+            # Bouton pour utiliser cette position dans l'application
+            if st.button("Analyser l'émagramme à cette position"):
+                st.session_state.site_selection = {
+                    "latitude": location["latitude"],
+                    "longitude": location["longitude"],
+                    "altitude": location["altitude"],
+                    "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
+                }
+                st.session_state.user_location = location
+                st.session_state.geolocation_attempted = True
+                st.session_state.run_analysis = True
+                st.rerun()
+
     # Proposer la géolocalisation matérielle (appareil mobile) si non tentée
     if not st.session_state.geolocation_attempted:
         st.info("📱 Pour une localisation plus précise, vous pouvez utiliser la géolocalisation de votre appareil.")
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            if st.button("📍 Utiliser la géolocalisation de mon appareil"):
-                with st.spinner("Accès à la géolocalisation en cours..."):
-                    device_location = get_device_geolocation()
-                    
-                    if device_location:
-                        # Si l'altitude n'est pas fournie ou est 0, obtenir l'altitude via API
-                        if device_location.get("altitude", 0) == 0:
-                            try:
-                                # Obtenir l'altitude via une API d'élévation
-                                lat = device_location["latitude"]
-                                lon = device_location["longitude"]
-                                elevation_response = requests.get(
-                                    f"https://api.open-elevation.com/api/v1/lookup?locations={lat},{lon}",
-                                    timeout=3
-                                )
-                                if elevation_response.status_code == 200:
-                                    elevation_data = elevation_response.json()
-                                    altitude = elevation_data.get('results', [{}])[0].get('elevation', 500)
-                                    device_location["altitude"] = altitude
-                                else:
-                                    device_location["altitude"] = 500  # Valeur par défaut
-                            except:
-                                device_location["altitude"] = 500  # Valeur par défaut
-                        
-                        # Obtenir le nom de la ville via API de géocodage inverse
-                        try:
-                            geocode_response = requests.get(
-                                f"https://nominatim.openstreetmap.org/reverse?format=json&lat={device_location['latitude']}&lon={device_location['longitude']}&zoom=14",
-                                headers={"User-Agent": "EmagrammeParapente/1.0"},
-                                timeout=3
-                            )
-                            if geocode_response.status_code == 200:
-                                geocode_data = geocode_response.json()
-                                city = geocode_data.get('address', {}).get('city', 
-                                      geocode_data.get('address', {}).get('town', 
-                                      geocode_data.get('address', {}).get('village', "Lieu inconnu")))
-                                device_location["city"] = city
-                            else:
-                                device_location["city"] = "Position actuelle"
-                        except:
-                            device_location["city"] = "Position actuelle"
-                        
-                        # Sauvegarder dans session_state
-                        st.session_state.user_location = device_location
-                        st.session_state.geolocation_attempted = True
-                        
-                        # Mettre à jour les coordonnées sélectionnées
-                        st.session_state.site_selection = {
-                            "latitude": device_location["latitude"],
-                            "longitude": device_location["longitude"],
-                            "altitude": device_location["altitude"],
-                            "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
-                        }
-                        st.rerun()
-                    else:
-                        st.error("Impossible d'accéder à la géolocalisation de votre appareil. Vérifiez les permissions du navigateur.")
+            pass
         
         with col2:
             if st.button("🌐 Utiliser la géolocalisation par IP"):
