@@ -134,7 +134,116 @@ def get_user_location():
         logger.warning(f"Erreur lors de la géolocalisation: {e}")
     
     return default_location
-      
+
+def search_ffvl_sites(lat, lon, radius=20, api_key="VOTRE_CLE_API"):
+    """
+    Recherche les sites de vol à proximité d'une position donnée
+    en utilisant l'API FFVL.
+    
+    Args:
+        lat: Latitude du point central
+        lon: Longitude du point central
+        radius: Rayon de recherche en km
+        api_key: Clé API FFVL
+        
+    Returns:
+        Liste des sites trouvés
+    """
+    try:
+        # URL de l'API FFVL pour les terrains
+        url = f"https://data.ffvl.fr/api?base=terrains&mode=json&key={api_key}"
+        
+        # Afficher l'URL pour le débogage
+        logger.info(f"Requête FFVL: {url}")
+        
+        response = requests.get(url, timeout=10)
+        
+        # Vérifier le statut et le contenu de la réponse
+        logger.info(f"Statut: {response.status_code}, Content-Type: {response.headers.get('Content-Type')}")
+        
+        # Afficher les 100 premiers caractères pour le débogage
+        content_preview = response.text[:100].replace('\n', ' ')
+        logger.info(f"Aperçu du contenu: {content_preview}...")
+        
+        if response.status_code != 200:
+            st.error(f"Erreur API FFVL: {response.status_code}")
+            return []
+        
+        # Vérifier si la réponse est vide
+        if not response.text.strip():
+            st.warning("L'API FFVL a renvoyé une réponse vide")
+            return []
+        
+        try:
+            data = response.json()
+        except json.JSONDecodeError as e:
+            st.error(f"Erreur de décodage JSON: {str(e)}")
+            st.code(response.text[:500], language="json")  # Afficher le début de la réponse
+            return []
+        
+        # Vérifier si la structure est correcte
+        if not isinstance(data, dict) or "terrains" not in data:
+            st.warning(f"Structure de données inattendue: {type(data)}")
+            if isinstance(data, dict):
+                st.json(data)  # Afficher le JSON reçu
+            return []
+        
+        # Filtrer les sites en fonction de leur distance par rapport au point central
+        # (approximation à vol d'oiseau)
+        sites = []
+        for terrain in data.get("terrains", []):
+            # Vérifier que les coordonnées sont valides
+            if not terrain.get("latitude") or not terrain.get("longitude"):
+                continue
+                
+            site_lat = float(terrain["latitude"])
+            site_lon = float(terrain["longitude"])
+            
+            # Calcul de distance approximatif (Haversine)
+            from math import radians, cos, sin, asin, sqrt
+            
+            def haversine(lat1, lon1, lat2, lon2):
+                # Convertir en radians
+                lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+                
+                # Formule haversine
+                dlon = lon2 - lon1 
+                dlat = lat2 - lat1 
+                a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+                c = 2 * asin(sqrt(a)) 
+                r = 6371  # Rayon de la Terre en km
+                return c * r
+            
+            distance = haversine(lat, lon, site_lat, site_lon)
+            
+            if distance <= radius:
+                # Récupérer les informations pertinentes
+                site_info = {
+                    "name": terrain.get("nom", "Site sans nom"),
+                    "type": terrain.get("type", "Type non spécifié"),
+                    "latitude": site_lat,
+                    "longitude": site_lon,
+                    "distance": round(distance, 1),
+                    "altitude": terrain.get("altitude_deco", ""),
+                    "orientation": terrain.get("orientations", ""),
+                    "status": terrain.get("statut", ""),
+                    "difficulty": terrain.get("difficulte", ""),
+                    "ffvl_id": terrain.get("id", ""),
+                    "icon_url": f"https://data.ffvl.fr/api/?base=terrains&mode=icon&tid={terrain.get('id', '')}"
+                }
+                
+                # Ne garder que les sites de parapente/delta
+                if "parapente" in site_info["type"].lower() or "delta" in site_info["type"].lower():
+                    sites.append(site_info)
+        
+        # Trier par distance
+        sites.sort(key=lambda x: x["distance"])
+        
+        return sites
+    except Exception as e:
+        logger.error(f"Erreur lors de la recherche des sites FFVL: {e}")
+        return []
+         
 # Fonction pour afficher l'émagramme dans Streamlit
 def display_emagramme(analyzer, analysis, llm_analysis=None):
     """Affiche l'émagramme et les résultats de l'analyse dans Streamlit"""
@@ -720,6 +829,113 @@ def show_glossary():
     4. **Vérifiez le vent** - Un vent fort en altitude peut rendre le vol difficile même avec de bons thermiques
     """)
 
+def get_device_geolocation():
+    """
+    Utilise l'API Geolocation du navigateur via un composant HTML personnalisé
+    pour obtenir la position précise de l'appareil.
+    """
+    # Créer un composant HTML avec le code JavaScript nécessaire
+    geolocation_html = """
+    <script>
+    // Fonction pour obtenir la position et la transmettre à Streamlit
+    function getLocation() {
+        if (navigator.geolocation) {
+            document.getElementById('geolocation_status').innerHTML = 'Demande de géolocalisation en cours...';
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    // Succès : on a les coordonnées
+                    var lat = position.coords.latitude;
+                    var lon = position.coords.longitude;
+                    var accuracy = position.coords.accuracy;
+                    var altitude = position.coords.altitude || 0;
+                    var altitudeAccuracy = position.coords.altitudeAccuracy || 0;
+                    
+                    // Créer une chaîne de données formatée pour Streamlit
+                    var locationData = {
+                        "latitude": lat,
+                        "longitude": lon,
+                        "accuracy": accuracy,
+                        "altitude": altitude,
+                        "altitudeAccuracy": altitudeAccuracy,
+                        "success": true
+                    };
+                    
+                    // Transmettre à Streamlit via le mécanisme de communication
+                    Streamlit.setComponentValue(locationData);
+                    document.getElementById('geolocation_status').innerHTML = 'Position obtenue avec succès!';
+                },
+                function(error) {
+                    // Erreur : informer l'utilisateur du problème
+                    var errorMsg = '';
+                    switch(error.code) {
+                        case error.PERMISSION_DENIED:
+                            errorMsg = "Vous avez refusé la demande de géolocalisation.";
+                            break;
+                        case error.POSITION_UNAVAILABLE:
+                            errorMsg = "Les informations de localisation ne sont pas disponibles.";
+                            break;
+                        case error.TIMEOUT:
+                            errorMsg = "La demande de localisation a expiré.";
+                            break;
+                        case error.UNKNOWN_ERROR:
+                            errorMsg = "Une erreur inconnue s'est produite.";
+                            break;
+                    }
+                    document.getElementById('geolocation_status').innerHTML = 'Erreur: ' + errorMsg;
+                    Streamlit.setComponentValue({"success": false, "error": errorMsg});
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 0
+                }
+            );
+        } else {
+            document.getElementById('geolocation_status').innerHTML = 'La géolocalisation n\'est pas prise en charge par ce navigateur.';
+            Streamlit.setComponentValue({"success": false, "error": "Géolocalisation non supportée"});
+        }
+    }
+    
+    // Exécuter la fonction de géolocalisation dès que le composant est prêt
+    // Attendre que Streamlit soit initialisé
+    if (window.Streamlit) {
+        getLocation();
+    } else {
+        window.addEventListener('load', function() {
+            // Réécrire cette fonction pour qu'elle soit compatible avec l'API Streamlit
+            window.Streamlit.componentReady().then(function() {
+                getLocation();
+            });
+        });
+    }
+    </script>
+    <div>
+        <p id="geolocation_status">En attente de permission de géolocalisation...</p>
+        <button onclick="getLocation()" style="background-color: #4CAF50; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">
+            Autoriser la géolocalisation
+        </button>
+    </div>
+    """
+    
+    # Utiliser components.html pour injecter le code JavaScript
+    try:
+        import streamlit.components.v1 as components
+        geolocation_data = components.html(geolocation_html, height=100, width=400)
+        
+        # Si des données ont été renvoyées, les traiter
+        if geolocation_data and isinstance(geolocation_data, dict) and geolocation_data.get("success", False):
+            return {
+                "latitude": geolocation_data["latitude"],
+                "longitude": geolocation_data["longitude"],
+                "altitude": geolocation_data.get("altitude", 0),
+                "accuracy": geolocation_data.get("accuracy", 0),
+                "altitudeAccuracy": geolocation_data.get("altitudeAccuracy", 0)
+            }
+        return None
+    except Exception as e:
+        logging.error(f"Erreur lors de la géolocalisation matérielle: {e}")
+        return None
+    
 # Interface principale
 def main():
     # Initialiser l'état de la géolocalisation
@@ -757,12 +973,102 @@ def main():
         🔴 **Rouge** - Conditions défavorables ou dangereuses
         """)
 
+    # Proposer la géolocalisation matérielle (appareil mobile) si non tentée
+    if not st.session_state.geolocation_attempted:
+        st.info("📱 Pour une localisation plus précise, vous pouvez utiliser la géolocalisation de votre appareil.")
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            if st.button("📍 Utiliser la géolocalisation de mon appareil"):
+                with st.spinner("Accès à la géolocalisation en cours..."):
+                    device_location = get_device_geolocation()
+                    
+                    if device_location:
+                        # Si l'altitude n'est pas fournie ou est 0, obtenir l'altitude via API
+                        if device_location.get("altitude", 0) == 0:
+                            try:
+                                # Obtenir l'altitude via une API d'élévation
+                                lat = device_location["latitude"]
+                                lon = device_location["longitude"]
+                                elevation_response = requests.get(
+                                    f"https://api.open-elevation.com/api/v1/lookup?locations={lat},{lon}",
+                                    timeout=3
+                                )
+                                if elevation_response.status_code == 200:
+                                    elevation_data = elevation_response.json()
+                                    altitude = elevation_data.get('results', [{}])[0].get('elevation', 500)
+                                    device_location["altitude"] = altitude
+                                else:
+                                    device_location["altitude"] = 500  # Valeur par défaut
+                            except:
+                                device_location["altitude"] = 500  # Valeur par défaut
+                        
+                        # Obtenir le nom de la ville via API de géocodage inverse
+                        try:
+                            geocode_response = requests.get(
+                                f"https://nominatim.openstreetmap.org/reverse?format=json&lat={device_location['latitude']}&lon={device_location['longitude']}&zoom=14",
+                                headers={"User-Agent": "EmagrammeParapente/1.0"},
+                                timeout=3
+                            )
+                            if geocode_response.status_code == 200:
+                                geocode_data = geocode_response.json()
+                                city = geocode_data.get('address', {}).get('city', 
+                                      geocode_data.get('address', {}).get('town', 
+                                      geocode_data.get('address', {}).get('village', "Lieu inconnu")))
+                                device_location["city"] = city
+                            else:
+                                device_location["city"] = "Position actuelle"
+                        except:
+                            device_location["city"] = "Position actuelle"
+                        
+                        # Sauvegarder dans session_state
+                        st.session_state.user_location = device_location
+                        st.session_state.geolocation_attempted = True
+                        
+                        # Mettre à jour les coordonnées sélectionnées
+                        st.session_state.site_selection = {
+                            "latitude": device_location["latitude"],
+                            "longitude": device_location["longitude"],
+                            "altitude": device_location["altitude"],
+                            "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
+                        }
+                        st.rerun()
+                    else:
+                        st.error("Impossible d'accéder à la géolocalisation de votre appareil. Vérifiez les permissions du navigateur.")
+        
+        with col2:
+            if st.button("🌐 Utiliser la géolocalisation par IP"):
+                with st.spinner("Tentative de géolocalisation par IP..."):
+                    user_location = get_user_location()
+                    st.session_state.user_location = user_location
+                    st.session_state.geolocation_attempted = True
+                    st.rerun()
+
     # Tenter la géolocalisation automatique au premier chargement de la page
     if not st.session_state.geolocation_attempted:
         with st.spinner("Tentative de géolocalisation..."):
             user_location = get_user_location()
             st.session_state.user_location = user_location
             st.session_state.geolocation_attempted = True
+    
+    if st.session_state.user_location and st.session_state.geolocation_attempted:
+        accuracy_info = ""
+        if "accuracy" in st.session_state.user_location:
+            accuracy_info = f" (précision: ±{st.session_state.user_location['accuracy']:.0f}m)"
+        
+        location_type = "📱 Géolocalisation précise" if "accuracy" in st.session_state.user_location else "🌐 Géolocalisé par IP"
+        st.sidebar.success(f"{location_type}: {st.session_state.user_location['city']}{accuracy_info}")
+        
+        # Bouton pour utiliser la position géolocalisée
+        if st.sidebar.button("Utiliser ma position actuelle"):
+            st.session_state.site_selection = {
+                "latitude": st.session_state.user_location["latitude"],
+                "longitude": st.session_state.user_location["longitude"],
+                "altitude": st.session_state.user_location["altitude"],
+                "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
+            }
+            st.session_state.run_analysis = True
+            st.rerun()
     
     # Initialiser l'état de session si nécessaire
     if 'site_selection' not in st.session_state:
@@ -855,8 +1161,8 @@ def main():
         delta_t = st.slider("Delta T de déclenchement (°C)", 
                          min_value=1.0, max_value=6.0, value=3.0, step=0.5,
                          help="Différence de température requise pour déclencher un thermique")
-    
-    # Nouvelle option pour l'évolution temporelle
+
+        # Nouvelle option pour l'évolution temporelle
         fetch_evolution_enabled = st.checkbox("Afficher l'évolution des conditions", value=True,
                                            help="Récupère les données pour plusieurs heures et affiche des graphiques d'évolution")
         
@@ -873,6 +1179,17 @@ def main():
         else:
             evolution_hours = 24
             evolution_step = 3
+        
+        # Ajouter la configuration FFVL
+        st.subheader("Paramètres FFVL")
+        ffvl_api_key = st.text_input("Clé API FFVL", 
+                                value=st.session_state.get("ffvl_api_key", ""),
+                                type="password",
+                                help="Clé API FFVL pour la recherche de sites. Contactez informatique@ffvl.fr pour l'obtenir.")
+        
+        # Sauvegarder la clé API dans session_state
+        if ffvl_api_key:
+            st.session_state.ffvl_api_key = ffvl_api_key
 
     # Section pour le pas de temps de prévision (nouveau)
     st.sidebar.header("Temps de prévision")
@@ -984,8 +1301,74 @@ def main():
             
         # Bouton pour rechercher le point de décollage le plus proche
         if st.button("🪂 Décollages proches"):
-            st.info("Recherche dans la base de données paragliding.earth en cours...")
-            # Ce serait un appel à une API ou une base de données externe
+            with st.spinner("Recherche des sites FFVL à proximité..."):
+                sites = search_ffvl_sites(
+                    latitude, 
+                    longitude, 
+                    radius=50, 
+                    api_key=st.session_state.get("ffvl_api_key", "DEMO_KEY")
+                )
+            
+            # Le filtrage doit être fait APRÈS avoir récupéré les sites
+            if sites:
+                # Optionnel : filtrer ici si vous souhaitez filtrer après la recherche
+                # filtered_sites = [site for site in sites if "parapente" in site.get("type", "").lower() or "delta" in site.get("type", "").lower()]
+                # sites = filtered_sites  # Remplacer la liste d'origine par la liste filtrée
+                st.success(f"{len(sites)} sites trouvés à proximité")
+                
+                # Afficher les sites dans un tableau
+                with st.expander("Sites de vol à proximité", expanded=True):
+                    for i, site in enumerate(sites[:10]):  # Limiter à 10 sites pour ne pas surcharger
+                        col1, col2, col3 = st.columns([2, 1, 1])
+                        with col1:
+                            st.markdown(f"**{site.get('name', 'Site sans nom')}**")
+                            # Vérifier l'existence des clés avant d'y accéder
+                            if 'type' in site and site['type']:
+                                st.markdown(f"Type: {site['type']}")
+                            if 'orientation' in site and site['orientation']:
+                                st.markdown(f"Orientation: {site['orientation']}")
+                            if 'difficulty' in site and site['difficulty']:
+                                st.markdown(f"Difficulté: {site['difficulty']}")
+                        
+                        with col2:
+                            if 'distance' in site:
+                                st.markdown(f"Distance: {site['distance']} km")
+                            if 'altitude' in site and site['altitude']:
+                                st.markdown(f"Altitude: {site['altitude']} m")
+                            
+                        with col3:
+                            if st.button(f"🪂", key=f"site_ffvl_{i}"):
+                                try:
+                                    # Déboguer les valeurs
+                                    st.write(f"Debug - latitude: {site.get('latitude')}, longitude: {site.get('longitude')}")
+                                    
+                                    # S'assurer que les coordonnées sont des nombres
+                                    lat = float(site.get("latitude", 0))
+                                    lon = float(site.get("longitude", 0))
+                                    alt_str = site.get("altitude", "")
+                                    
+                                    # Convertir l'altitude en nombre si possible
+                                    try:
+                                        alt = float(alt_str) if alt_str else st.session_state.site_selection["altitude"]
+                                    except (ValueError, TypeError):
+                                        alt = st.session_state.site_selection["altitude"]
+                                    
+                                    # Vérifier que les coordonnées sont valides
+                                    if -90 <= lat <= 90 and -180 <= lon <= 180:
+                                        st.session_state.site_selection = {
+                                            "latitude": lat,
+                                            "longitude": lon,
+                                            "altitude": alt,
+                                            "model": st.session_state.site_selection["model"]
+                                        }
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Coordonnées hors limites: lat={lat}, lon={lon}")
+                                except Exception as e:
+                                    st.error(f"Erreur lors de l'utilisation du site: {str(e)}")
+        else:
+            st.warning("Aucun site de vol trouvé à proximité")
+            st.info("Essayez d'augmenter le rayon de recherche ou de vérifier votre position")
     
 
     # Ajouter la possibilité de recherche par nom de lieu
@@ -1033,27 +1416,13 @@ def main():
                                             "altitude": altitude,
                                             "model": st.session_state.site_selection["model"]
                                         }
-                                        st.experimental_rerun()
+                                        st.rerun()
                         else:
                             st.warning("Aucun résultat trouvé")
                     else:
                         st.error("Erreur lors de la recherche")
             except Exception as e:
                 st.error(f"Erreur: {e}")
-
-    # Afficher le résultat de la géolocalisation s'il est disponible
-    if st.session_state.user_location and st.session_state.geolocation_attempted:
-        st.sidebar.success(f"📍 Géolocalisé: {st.session_state.user_location['city']}")
-        
-        # Bouton pour utiliser la position géolocalisée
-        if st.sidebar.button("Utiliser ma position actuelle"):
-            st.session_state.site_selection = {
-                "latitude": st.session_state.user_location["latitude"],
-                "longitude": st.session_state.user_location["longitude"],
-                "altitude": st.session_state.user_location["altitude"],
-                "model": st.session_state.site_selection["model"]  # Conserver le modèle actuel
-            }
-            st.session_state.run_analysis = True
 
     # Bouton pour lancer l'analyse (IMPORTANT: définir 'analyze_clicked' AVANT de l'utiliser)
     analyze_clicked = st.button("Analyser l'émagramme")
@@ -1123,9 +1492,9 @@ def main():
                 
                 # Onglets pour le reste des informations
                 if fetch_evolution_enabled and evolution_data:
-                    tab1, tab2, tab3 = st.tabs(["Résultats", "Évolution et Données brutes", "Aide"])
+                    tab1, tab2, tab3, tab4 = st.tabs(["Résultats", "Évolution et Données brutes", "Sites FFVL", "Aide"])
                 else:
-                    tab1, tab2, tab3 = st.tabs(["Résultats", "Données brutes", "Aide"])
+                    tab1, tab2, tab3, tab4 = st.tabs(["Résultats", "Données brutes", "Sites FFVL", "Aide"])
                 
                 with tab1:
                     st.subheader("Analyse des mouvements d'air verticaux")
@@ -1445,6 +1814,103 @@ def main():
                     )
 
                 with tab3:
+                    st.header("Recherche de sites FFVL")
+                    
+                    # Explication
+                    st.markdown("""
+                    Cette fonctionnalité vous permet de rechercher des sites de vol officiels dans la base de données 
+                    de la Fédération Française de Vol Libre (FFVL).
+                    """)
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        ffvl_lat = st.number_input("Latitude", value=latitude, format="%.4f", key="ffvl_lat")
+                        ffvl_lon = st.number_input("Longitude", value=longitude, format="%.4f", key="ffvl_lon")
+                    
+                    with col2:
+                        search_radius = st.slider("Rayon de recherche (km)", 5, 100, 20, 5)
+                        st.info("Une plus grande distance augmente le temps de recherche")
+                    
+                    if st.button("Rechercher des sites FFVL", key="search_ffvl"):
+                        with st.spinner("Recherche des sites FFVL..."):
+                            sites = search_ffvl_sites(
+                                ffvl_lat, 
+                                ffvl_lon, 
+                                radius=search_radius, 
+                                api_key=st.session_state.get("ffvl_api_key", "DEMO_KEY")
+                            )
+                            
+                            if sites:
+                                st.success(f"{len(sites)} sites trouvés")
+                                
+                                # Créer un DataFrame pour affichage
+                                sites_df = pd.DataFrame(sites)
+                                sites_display = sites_df[["name", "type", "distance", "altitude", "orientation", "difficulty"]].copy()
+                                sites_display.columns = ["Nom", "Type", "Distance (km)", "Altitude (m)", "Orientation", "Difficulté"]
+                                
+                                st.dataframe(sites_display)
+                                
+                                # Afficher une carte avec les sites
+                                import folium
+                                from streamlit_folium import folium_static
+                                
+                                m = folium.Map(location=[ffvl_lat, ffvl_lon], zoom_start=10)
+                                
+                                # Ajouter le point central
+                                folium.Marker(
+                                    [ffvl_lat, ffvl_lon],
+                                    popup="Position de référence",
+                                    icon=folium.Icon(color="red", icon="info-sign")
+                                ).add_to(m)
+                                
+                                # Ajouter les sites
+                                for site in sites:
+                                    icon_color = "green"
+                                    if "difficile" in site.get("difficulty", "").lower():
+                                        icon_color = "red"
+                                    elif "confirmé" in site.get("difficulty", "").lower():
+                                        icon_color = "orange"
+                                    
+                                    folium.Marker(
+                                        [site["latitude"], site["longitude"]],
+                                        popup=f"<b>{site['name']}</b><br>Type: {site['type']}<br>Altitude: {site['altitude']}m<br>Orientation: {site['orientation']}<br>Difficulté: {site['difficulty']}",
+                                        icon=folium.Icon(color=icon_color, icon="flag")
+                                    ).add_to(m)
+                                
+                                # Afficher la carte
+                                folium_static(m)
+                                
+                                # Bouton pour sélectionner un site
+                                selected_site = st.selectbox("Sélectionner un site pour l'analyse", 
+                                                        options=range(len(sites)),
+                                                        format_func=lambda i: f"{sites[i]['name']} ({sites[i]['distance']} km)")
+                                
+                                if st.button("Utiliser ce site"):
+                                    site = sites[selected_site]
+                                    st.session_state.site_selection = {
+                                        "latitude": site["latitude"],
+                                        "longitude": site["longitude"],
+                                        "altitude": float(site["altitude"]) if site["altitude"] else st.session_state.site_selection["altitude"],
+                                        "model": st.session_state.site_selection["model"]
+                                    }
+                                    st.rerun()
+                            else:
+                                st.warning("Aucun site trouvé dans ce rayon")
+                                st.info("Essayez d'augmenter le rayon de recherche ou de vérifier votre position")
+                    
+                    # Ajouter une note sur l'API FFVL
+                    st.markdown("""
+                    ---
+                    ### Note sur l'API FFVL
+                    
+                    Pour utiliser pleinement cette fonctionnalité, vous devez obtenir une clé API auprès de la FFVL en contactant 
+                    informatique@ffvl.fr. Entrez cette clé dans les Paramètres avancés de la barre latérale.
+                    
+                    Les données sont fournies par la Fédération Française de Vol Libre : [ffvl.fr](https://www.ffvl.fr)
+                    """)
+
+                with tab4:
                     st.header("Guide de la météorologie aérologique")
                     
                     st.write("""

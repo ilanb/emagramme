@@ -27,3 +27,5 @@ requests-cache
 retry-requests
 openmeteo-requests
 plotly
+folium 
+streamlit-folium
