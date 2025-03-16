@@ -1236,13 +1236,7 @@ def main():
                               step=10.0,  # Changé de int à float
                               format="%.1f")  # Format avec un chiffre après la virgule
                                       
-    with col4:
-        # Bouton pour ouvrir la position dans Google Maps
-        st.write("Voir sur la carte")
-        if st.button("🗺️ Google Maps"):
-            maps_url = f"https://www.google.com/maps/search/?api=1&query={latitude},{longitude}"
-            st.markdown(f"[Ouvrir dans Google Maps]({maps_url})")
-            
+    
     # Section pour la recherche de décollages proches
     with st.expander("🪂 Recherche de décollages proches", expanded=False):
         search_radius = st.slider(
