@@ -851,9 +851,6 @@ def main():
         else:
             st.warning("📱 En attente de géolocalisation... Si vous ne voyez pas d'invite d'autorisation, vérifiez les paramètres de votre navigateur.")
 
-        if st.button("Activer la géolocalisation", key="activate_geolocation"):
-            st.rerun()
-
         if st.checkbox("Mode débogage"):
             st.write("Informations de débogage :")
             st.write(f"Location object: {location}")
@@ -937,7 +934,7 @@ def main():
             
             # Afficher une carte avec la position
             import folium
-            from streamlit_folium import folium_static
+            from streamlit_folium import st_folium
             
             if location['latitude'] is not None and location['longitude'] is not None:
                 m = folium.Map(location=[location['latitude'], location['longitude']], zoom_start=13)
@@ -960,7 +957,7 @@ def main():
                     ).add_to(m)
                 
                 st.subheader("Votre position")
-                folium_static(m)
+                st_folium(m)
             
             # Bouton pour utiliser cette position dans l'application
             if st.button("Analyser l'émagramme à cette position"):
@@ -1001,18 +998,6 @@ def main():
                 st.rerun()
             else:
                 st.sidebar.error("Coordonnées GPS non disponibles.")
-    # Si aucune géolocalisation n'a été tentée, proposer la géolocalisation par IP
-    elif not st.session_state.geolocation_attempted:
-        st.info("📱 Pour une localisation plus précise, utilisez l'option 'Utiliser la géolocalisation de mon appareil'.")
-        
-        col1, col2 = st.columns([1, 1])
-        with col2:
-            if st.button("🌐 Utiliser la géolocalisation par IP"):
-                with st.spinner("Tentative de géolocalisation par IP..."):
-                    user_location = get_user_location()
-                    st.session_state.user_location = user_location
-                    st.session_state.geolocation_attempted = True
-                    st.rerun()
 
     # Dans le corps principal de l'application
     if st.session_state.get("tutorial_mode", False):
@@ -1235,30 +1220,31 @@ def main():
     
     # Section des paramètres de localisation
     st.subheader("Localisation")
-    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+    col1, col2, col3 = st.columns([1, 1, 1])
 
-    with col1:
-        latitude = st.number_input("Latitude", 
-                                 min_value=-90.0, max_value=90.0, 
-                                 value=st.session_state.site_selection["latitude"], 
-                                 step=0.0001,
-                                 format="%.4f")
-    
-    with col2:
-        longitude = st.number_input("Longitude", 
-                                  min_value=-180.0, max_value=180.0, 
-                                  value=st.session_state.site_selection["longitude"], 
-                                  step=0.0001,
-                                  format="%.4f")
-    
-    with col3:
-        # Altitude du site
-        site_altitude = st.number_input("Altitude (m)", 
-                              min_value=0.0,  # Changé de int à float
-                              max_value=5000.0,  # Changé de int à float
-                              value=float(st.session_state.site_selection["altitude"]),  # S'assurer que c'est un float
-                              step=10.0,  # Changé de int à float
-                              format="%.1f")  # Format avec un chiffre après la virgule
+    if location and 'latitude' in location and location['latitude'] is not None and 'longitude' in location and location['longitude'] is not None:
+        with col1:
+            latitude = st.number_input("Latitude", 
+                                    min_value=-90.0, max_value=90.0, 
+                                    value=st.session_state.site_selection["latitude"], 
+                                    step=0.0001,
+                                    format="%.4f")
+        
+        with col2:
+            longitude = st.number_input("Longitude", 
+                                    min_value=-180.0, max_value=180.0, 
+                                    value=st.session_state.site_selection["longitude"], 
+                                    step=0.0001,
+                                    format="%.4f")
+        
+        with col3:
+            # Altitude du site
+            site_altitude = st.number_input("Altitude (m)", 
+                                min_value=0.0,  # Changé de int à float
+                                max_value=5000.0,  # Changé de int à float
+                                value=float(st.session_state.site_selection["altitude"]),  # S'assurer que c'est un float
+                                step=10.0,  # Changé de int à float
+                                format="%.1f")  # Format avec un chiffre après la virgule
                                       
     
     # Section pour la recherche de décollages proches
@@ -1864,17 +1850,6 @@ def main():
                             else:
                                 st.warning("Aucun site trouvé dans ce rayon")
                                 st.info("Essayez d'augmenter le rayon de recherche ou de vérifier votre position")
-                    
-                    # Ajouter une note sur l'API FFVL
-                    st.markdown("""
-                    ---
-                    ### Note sur l'API FFVL
-                    
-                    Pour utiliser pleinement cette fonctionnalité, vous devez obtenir une clé API auprès de la FFVL en contactant 
-                    informatique@ffvl.fr. Entrez cette clé dans les Paramètres avancés de la barre latérale.
-                    
-                    Les données sont fournies par la Fédération Française de Vol Libre : [ffvl.fr](https://www.ffvl.fr)
-                    """)
 
                 with tab4:
                     st.header("Guide de la météorologie aérologique")
