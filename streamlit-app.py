@@ -1168,6 +1168,7 @@ def main():
         else:
             forecast_text = f"Prévision pour H+{hours}"
         st.sidebar.success(forecast_text)
+        analyze_clicked = st.sidebar.button("Analyser l'émagramme", key="sidebar_analyser_emagramme")
     
     # Section pour les sites prédéfinis
     st.sidebar.header("Sites prédéfinis")
@@ -1528,7 +1529,7 @@ def main():
                                 forecast_time = f" - Prévision pour J+{days}, {remaining_hours}h"
                             else:
                                 forecast_time = f" - Prévision pour H+{hour}"
-                                
+
                         model_name = analysis.model_name if hasattr(analysis, 'model_name') and analysis.model_name else "inconnu"
                         st.info(f"Modèle météo utilisé: {model_name.upper()}{forecast_time}")
 
