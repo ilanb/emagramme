@@ -842,6 +842,25 @@ def get_location():
             lat = float(query_params["lat"])
             lon = float(query_params["lon"])
             
+            # Réinitialiser COMPLÈTEMENT les informations de géolocalisation
+            st.session_state.user_location = {
+                "latitude": lat,
+                "longitude": lon,
+                "altitude": alt,
+                "accuracy": accuracy,
+                "city": city,
+                "source": "GPS"  # Important: marquer la source comme GPS
+            }
+
+            # Débogage
+            st.write("DEBUG: Coordonnées GPS obtenues")
+            st.write(f"Latitude: {lat}, Longitude: {lon}")
+            st.write(f"Altitude: {alt}, Précision: {accuracy}")
+            st.write(f"Ville: {city}")
+            
+            # Pour forcer l'affichage avant de continuer
+            st.stop()
+
             # Récupérer l'altitude si présente
             alt = 0
             if "alt" in query_params and query_params["alt"] != "null":
@@ -895,17 +914,14 @@ def get_location():
                 "accuracy": accuracy
             }
             
-            # Nettoyer les paramètres d'URL pour les enlever de l'adresse après utilisation
+            # Forcer la géolocalisation comme réussie et d'origine GPS
+            st.session_state.geolocation_attempted = True
+            st.session_state.gps_used = True
+            
+            # Nettoyer les paramètres d'URL
             st.query_params.clear()
             
-            return {
-                "latitude": lat,
-                "longitude": lon,
-                "altitude": alt,
-                "accuracy": accuracy,
-                "city": city,
-                "success": True
-            }
+            return st.session_state.user_location
         except Exception as e:
             st.error(f"Erreur lors du traitement des données de localisation: {str(e)}")
             st.query_params.clear()
@@ -994,6 +1010,8 @@ def get_location():
     
 # Interface principale
 def main():
+    if 'gps_used' not in st.session_state:
+        st.session_state.gps_used = False
     # Initialiser l'état de la géolocalisation
     if 'geolocation_attempted' not in st.session_state:
         st.session_state.geolocation_attempted = False
@@ -1119,14 +1137,18 @@ def main():
         
         # Bouton pour utiliser la position géolocalisée
         if st.sidebar.button("Utiliser ma position actuelle"):
-            st.session_state.site_selection = {
-                "latitude": st.session_state.user_location["latitude"],
-                "longitude": st.session_state.user_location["longitude"],
-                "altitude": st.session_state.user_location["altitude"],
-                "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
-            }
-            st.session_state.run_analysis = True
-            st.rerun()
+            if st.session_state.user_location:
+                source_text = "GPS" if st.session_state.get("gps_used", False) else "IP"
+                st.sidebar.info(f"Utilisation des coordonnées obtenues par {source_text}")
+                
+                st.session_state.site_selection = {
+                    "latitude": st.session_state.user_location["latitude"],
+                    "longitude": st.session_state.user_location["longitude"],
+                    "altitude": st.session_state.user_location["altitude"],
+                    "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
+                }
+                st.session_state.run_analysis = True
+                st.rerun()
     
     # Initialiser l'état de session si nécessaire
     if 'site_selection' not in st.session_state:
