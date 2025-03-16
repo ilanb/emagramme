@@ -832,6 +832,9 @@ def show_glossary():
 
 # Interface principale
 def main():
+    sidebar_analyze_clicked = False
+    main_analyze_clicked = False
+
     # Initialiser l'état de la géolocalisation
     if 'geolocation_attempted' not in st.session_state:
         st.session_state.geolocation_attempted = False
@@ -1163,12 +1166,13 @@ def main():
     days = timestep // 24
     hours = timestep % 24
     if timestep > 0:
+        forecast_text = f"Prévision pour H+{hours}" if days == 0 else f"Prévision pour J+{days}, {hours}h"
+        st.sidebar.success(forecast_text)
+        sidebar_analyze_clicked = st.sidebar.button("Analyser l'émagramme", key="sidebar_analyser_emagramme")
         if days > 0:
             forecast_text = f"Prévision pour J+{days}, {hours}h"
         else:
             forecast_text = f"Prévision pour H+{hours}"
-        st.sidebar.success(forecast_text)
-        analyze_clicked = st.sidebar.button("Analyser l'émagramme", key="sidebar_analyser_emagramme")
     
     # Section pour les sites prédéfinis
     st.sidebar.header("Sites prédéfinis")
@@ -1378,10 +1382,10 @@ def main():
                 st.error(f"Erreur: {e}")
 
     # Bouton pour lancer l'analyse (IMPORTANT: définir 'analyze_clicked' AVANT de l'utiliser)
-    analyze_clicked = st.button("Analyser l'émagramme")
+    main_analyze_clicked = st.button("Analyser l'émagramme")
     
     # Maintenant on peut utiliser analyze_clicked
-    should_run_analysis = analyze_clicked or st.session_state.run_analysis
+    should_run_analysis = main_analyze_clicked or sidebar_analyze_clicked or st.session_state.run_analysis
 
     if should_run_analysis:
         # Réinitialiser le flag pour éviter des analyses en boucle
