@@ -844,7 +844,24 @@ def main():
         # Utiliser streamlit_geolocation pour récupérer la position
         location = streamlit_geolocation()
         
-        if location and 'latitude' in location and 'longitude' in location:
+        # Afficher l'état de la géolocalisation après avoir essayé de récupérer la position
+        st.write("État de la géolocalisation :")
+        if location and 'latitude' in location and location['latitude'] is not None and 'longitude' in location and location['longitude'] is not None:
+            st.success("📱 Géolocalisation activée")
+        else:
+            st.warning("📱 En attente de géolocalisation... Si vous ne voyez pas d'invite d'autorisation, vérifiez les paramètres de votre navigateur.")
+
+        if st.button("Activer la géolocalisation", key="activate_geolocation"):
+            st.rerun()
+
+        if st.checkbox("Mode débogage"):
+            st.write("Informations de débogage :")
+            st.write(f"Location object: {location}")
+            st.write(f"Session state: {st.session_state}")
+            if hasattr(st, 'request_headers'):
+                st.write(f"User agent: {st.request_headers['User-Agent']}")
+        
+        if location and 'latitude' in location and location['latitude'] is not None and 'longitude' in location and location['longitude'] is not None:
             # La géolocalisation a réussi, mettre à jour l'état de session
             
             # Tenter d'obtenir le nom de la ville
@@ -962,21 +979,28 @@ def main():
     # Si la géolocalisation GPS a réussi, afficher un bouton dans la sidebar
     if st.session_state.user_location and st.session_state.geolocation_attempted and st.session_state.user_location.get("source") == "GPS":
         accuracy_info = ""
-        if "accuracy" in st.session_state.user_location:
-            accuracy_info = f" (précision: ±{st.session_state.user_location['accuracy']:.0f}m)"
+        if "accuracy" in st.session_state.user_location and st.session_state.user_location["accuracy"] is not None:
+            try:
+                accuracy_info = f" (précision: ±{st.session_state.user_location['accuracy']:.0f}m)"
+            except:
+                accuracy_info = " (précision: non disponible)"
         
         st.sidebar.success(f"📱 Géolocalisation précise: {st.session_state.user_location['city']}{accuracy_info}")
         
         # Bouton pour utiliser la position géolocalisée
         if st.sidebar.button("Utiliser ma position GPS"):
-            st.session_state.site_selection = {
-                "latitude": st.session_state.user_location["latitude"],
-                "longitude": st.session_state.user_location["longitude"],
-                "altitude": st.session_state.user_location["altitude"],
-                "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
-            }
-            st.session_state.run_analysis = True
-            st.rerun()
+            # Vérifier que latitude et longitude ne sont pas None
+            if st.session_state.user_location.get("latitude") is not None and st.session_state.user_location.get("longitude") is not None:
+                st.session_state.site_selection = {
+                    "latitude": st.session_state.user_location["latitude"],
+                    "longitude": st.session_state.user_location["longitude"],
+                    "altitude": st.session_state.user_location["altitude"],
+                    "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
+                }
+                st.session_state.run_analysis = True
+                st.rerun()
+            else:
+                st.sidebar.error("Coordonnées GPS non disponibles.")
     # Si aucune géolocalisation n'a été tentée, proposer la géolocalisation par IP
     elif not st.session_state.geolocation_attempted:
         st.info("📱 Pour une localisation plus précise, utilisez l'option 'Utiliser la géolocalisation de mon appareil'.")
