@@ -519,38 +519,53 @@ def create_evolution_plots(evolution_data, site_altitude):
     # Créer les graphiques
     graphs = {}
     
-    # 1. Évolution du plafond thermique
+    # Ajouter ce code de débogage pour vérifier les valeurs
+    #st.write("Valeurs du plafond thermique:", df["thermal_ceiling_relative"].tolist())
+    #st.write("Valeurs du gradient thermique:", df["thermal_gradient"].tolist())
+
+    # 1. CRÉER D'ABORD les graphiques, PUIS ajouter les annotations
+    # Évolution du plafond thermique - Modifier le style du graphique
     fig_ceiling = px.line(df, x="time_str", y="thermal_ceiling_relative", 
-                         labels={"thermal_ceiling_relative": "Plafond thermique (m au-dessus du site)", 
+                        labels={"thermal_ceiling_relative": "Plafond thermique (m au-dessus du site)", 
                                 "time_str": "Date/Heure"},
-                         title="Évolution du plafond thermique",
-                         markers=True)
+                        title="Évolution du plafond thermique",
+                        markers=True,
+                        color_discrete_sequence=["blue"])  # Couleur bleue
     fig_ceiling.update_layout(hovermode="x unified")
+    fig_ceiling.update_traces(line=dict(width=3))  # Ligne plus épaisse
+    
+    # MAINTENANT ajouter les rectangles au graphique du plafond
+    fig_ceiling.add_hrect(y0=0, y1=500, line_width=0, fillcolor="red", opacity=0.1,
+                        annotation_text="Faible", annotation_position="right")
+    fig_ceiling.add_hrect(y0=500, y1=1500, line_width=0, fillcolor="yellow", opacity=0.1,
+                        annotation_text="Moyen", annotation_position="right")
+    fig_ceiling.add_hrect(y0=1500, y1=3000, line_width=0, fillcolor="green", opacity=0.1,
+                        annotation_text="Bon", annotation_position="right")
+    
     graphs["ceiling"] = fig_ceiling
-    
-    # 2. Évolution du gradient thermique
+
+    # 2. Évolution du gradient thermique - Style différent
     fig_gradient = px.line(df, x="time_str", y="thermal_gradient",
-                          labels={"thermal_gradient": "Gradient (°C/1000m)", 
-                                 "time_str": "Date/Heure"},
-                          title="Évolution du gradient thermique",
-                          markers=True)
+                        labels={"thermal_gradient": "Gradient (°C/1000m)", 
+                                "time_str": "Date/Heure"},
+                        title="Évolution du gradient thermique",
+                        markers=True,
+                        color_discrete_sequence=["red"])  # Couleur rouge
     fig_gradient.update_layout(hovermode="x unified")
-    graphs["gradient"] = fig_gradient
     
-    # 3. Évolution de la couverture nuageuse (graphique empilé)
-    fig_clouds = go.Figure()
-    fig_clouds.add_trace(go.Bar(x=df["time_str"], y=df["cloud_cover_low"],
-                              name="Nuages bas", marker_color="royalblue"))
-    fig_clouds.add_trace(go.Bar(x=df["time_str"], y=df["cloud_cover_mid"],
-                              name="Nuages moyens", marker_color="lightblue"))
-    fig_clouds.add_trace(go.Bar(x=df["time_str"], y=df["cloud_cover_high"],
-                              name="Nuages hauts", marker_color="lightskyblue"))
-    fig_clouds.update_layout(barmode="stack", 
-                           title="Évolution de la couverture nuageuse",
-                           xaxis_title="Date/Heure", 
-                           yaxis_title="Couverture (%)",
-                           hovermode="x unified")
-    graphs["clouds"] = fig_clouds
+    # Ajouter des annotations au graphique du gradient
+    fig_gradient.add_hline(y=6.5, line_dash="dash", line_color="green", 
+                        annotation_text="Bon gradient", annotation_position="right")
+    
+    # Ajouter les rectangles au graphique du gradient
+    fig_gradient.add_hrect(y0=0, y1=4, line_width=0, fillcolor="red", opacity=0.1,
+                        annotation_text="Faible", annotation_position="right")
+    fig_gradient.add_hrect(y0=4, y1=6.5, line_width=0, fillcolor="yellow", opacity=0.1,
+                        annotation_text="Moyen", annotation_position="right")
+    fig_gradient.add_hrect(y0=6.5, y1=10, line_width=0, fillcolor="green", opacity=0.1,
+                        annotation_text="Fort", annotation_position="right")
+    
+    graphs["gradient"] = fig_gradient
     
     # 4. Précipitations et probabilité
     fig_precip = go.Figure()
