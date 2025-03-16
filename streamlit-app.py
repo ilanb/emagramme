@@ -1299,77 +1299,81 @@ def main():
             maps_url = f"https://www.google.com/maps/search/?api=1&query={latitude},{longitude}"
             st.markdown(f"[Ouvrir dans Google Maps]({maps_url})")
             
-        # Bouton pour rechercher le point de décollage le plus proche
-        if st.button("🪂 Décollages proches"):
-            with st.spinner("Recherche des sites FFVL à proximité..."):
+    # Section pour la recherche de décollages proches
+    with st.expander("🪂 Recherche de décollages proches", expanded=False):
+        search_radius = st.slider(
+            "Rayon de recherche (km)", 
+            min_value=5, 
+            max_value=100, 
+            value=50,
+            step=5,
+            help="Distance maximale des sites à rechercher"
+        )
+        
+        if st.button("Rechercher les décollages"):
+            with st.spinner(f"Recherche des sites FFVL à proximité dans un rayon de {search_radius} km..."):
                 sites = search_ffvl_sites(
                     latitude, 
                     longitude, 
-                    radius=50, 
+                    radius=search_radius,
                     api_key=st.session_state.get("ffvl_api_key", "DEMO_KEY")
                 )
             
-            # Le filtrage doit être fait APRÈS avoir récupéré les sites
             if sites:
-                # Optionnel : filtrer ici si vous souhaitez filtrer après la recherche
-                # filtered_sites = [site for site in sites if "parapente" in site.get("type", "").lower() or "delta" in site.get("type", "").lower()]
-                # sites = filtered_sites  # Remplacer la liste d'origine par la liste filtrée
                 st.success(f"{len(sites)} sites trouvés à proximité")
                 
                 # Afficher les sites dans un tableau
-                with st.expander("Sites de vol à proximité", expanded=True):
-                    for i, site in enumerate(sites[:10]):  # Limiter à 10 sites pour ne pas surcharger
-                        col1, col2, col3 = st.columns([2, 1, 1])
-                        with col1:
-                            st.markdown(f"**{site.get('name', 'Site sans nom')}**")
-                            # Vérifier l'existence des clés avant d'y accéder
-                            if 'type' in site and site['type']:
-                                st.markdown(f"Type: {site['type']}")
-                            if 'orientation' in site and site['orientation']:
-                                st.markdown(f"Orientation: {site['orientation']}")
-                            if 'difficulty' in site and site['difficulty']:
-                                st.markdown(f"Difficulté: {site['difficulty']}")
+                for i, site in enumerate(sites[:10]):
+                    col1, col2, col3 = st.columns([2, 1, 1])
+                    with col1:
+                        st.markdown(f"**{site.get('name', 'Site sans nom')}**")
+                        # Vérifier l'existence des clés avant d'y accéder
+                        if 'type' in site and site['type']:
+                            st.markdown(f"Type: {site['type']}")
+                        if 'orientation' in site and site['orientation']:
+                            st.markdown(f"Orientation: {site['orientation']}")
+                        if 'difficulty' in site and site['difficulty']:
+                            st.markdown(f"Difficulté: {site['difficulty']}")
+                    
+                    with col2:
+                        if 'distance' in site:
+                            st.markdown(f"Distance: {site['distance']} km")
+                        if 'altitude' in site and site['altitude']:
+                            st.markdown(f"Altitude: {site['altitude']} m")
                         
-                        with col2:
-                            if 'distance' in site:
-                                st.markdown(f"Distance: {site['distance']} km")
-                            if 'altitude' in site and site['altitude']:
-                                st.markdown(f"Altitude: {site['altitude']} m")
-                            
-                        with col3:
-                            if st.button(f"🪂", key=f"site_ffvl_{i}"):
+                    with col3:
+                        if st.button(f"🪂", key=f"site_ffvl_{i}"):
+                            try:
+                                # Déboguer les valeurs
+                                st.write(f"Debug - latitude: {site.get('latitude')}, longitude: {site.get('longitude')}")
+                                
+                                # S'assurer que les coordonnées sont des nombres
+                                lat = float(site.get("latitude", 0))
+                                lon = float(site.get("longitude", 0))
+                                alt_str = site.get("altitude", "")
+                                
+                                # Convertir l'altitude en nombre si possible
                                 try:
-                                    # Déboguer les valeurs
-                                    st.write(f"Debug - latitude: {site.get('latitude')}, longitude: {site.get('longitude')}")
-                                    
-                                    # S'assurer que les coordonnées sont des nombres
-                                    lat = float(site.get("latitude", 0))
-                                    lon = float(site.get("longitude", 0))
-                                    alt_str = site.get("altitude", "")
-                                    
-                                    # Convertir l'altitude en nombre si possible
-                                    try:
-                                        alt = float(alt_str) if alt_str else st.session_state.site_selection["altitude"]
-                                    except (ValueError, TypeError):
-                                        alt = st.session_state.site_selection["altitude"]
-                                    
-                                    # Vérifier que les coordonnées sont valides
-                                    if -90 <= lat <= 90 and -180 <= lon <= 180:
-                                        st.session_state.site_selection = {
-                                            "latitude": lat,
-                                            "longitude": lon,
-                                            "altitude": alt,
-                                            "model": st.session_state.site_selection["model"]
-                                        }
-                                        st.rerun()
-                                    else:
-                                        st.error(f"Coordonnées hors limites: lat={lat}, lon={lon}")
-                                except Exception as e:
-                                    st.error(f"Erreur lors de l'utilisation du site: {str(e)}")
-        else:
-            st.warning("Aucun site de vol trouvé à proximité")
-            st.info("Essayez d'augmenter le rayon de recherche ou de vérifier votre position")
-    
+                                    alt = float(alt_str) if alt_str else st.session_state.site_selection["altitude"]
+                                except (ValueError, TypeError):
+                                    alt = st.session_state.site_selection["altitude"]
+                                
+                                # Vérifier que les coordonnées sont valides
+                                if -90 <= lat <= 90 and -180 <= lon <= 180:
+                                    st.session_state.site_selection = {
+                                        "latitude": lat,
+                                        "longitude": lon,
+                                        "altitude": alt,
+                                        "model": st.session_state.site_selection["model"]
+                                    }
+                                    st.experimental_rerun()
+                                else:
+                                    st.error(f"Coordonnées hors limites: lat={lat}, lon={lon}")
+                            except Exception as e:
+                                st.error(f"Erreur lors de l'utilisation du site: {str(e)}")
+            else:
+                st.warning("Aucun site de vol trouvé à proximité")
+                st.info("Essayez d'augmenter le rayon de recherche ou de vérifier votre position")
 
     # Ajouter la possibilité de recherche par nom de lieu
     with st.expander("🔍 Rechercher un lieu"):
