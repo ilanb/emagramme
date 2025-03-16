@@ -2199,8 +2199,8 @@ class EmagrammeDataFetcher:
                 }
                 
                 # Déterminer les indices pour l'évolution
-                start_idx = timestep
-                end_idx = min(start_idx + evolution_hours, len(hourly_df))
+                start_idx = 0  # Toujours commencer à l'heure actuelle
+                end_idx = min(timestep + 1, len(hourly_df))
                 
                 # Extraire les données pour chaque pas de temps
                 for i in range(start_idx, end_idx, evolution_step):

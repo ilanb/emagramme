@@ -1122,7 +1122,7 @@ def main():
 
         # Nouvelle option pour l'évolution temporelle
         fetch_evolution_enabled = st.checkbox("Afficher l'évolution des conditions", value=True,
-                                           help="Récupère les données pour plusieurs heures et affiche des graphiques d'évolution")
+                                   help="Récupère les données depuis l'heure actuelle jusqu'à l'heure de prévision sélectionnée et affiche des graphiques d'évolution")
         
         if fetch_evolution_enabled:
             col1, col2 = st.columns(2)
@@ -1588,7 +1588,8 @@ def main():
                 if fetch_evolution_enabled and evolution_data and "tab2" in locals():
                     with tab2:
                         st.header("Évolution des conditions sur la période")
-                        
+                        st.info(f"Ce graphique montre l'évolution des conditions météorologiques depuis l'heure actuelle jusqu'à la prévision H+{timestep}.")
+
                         # Créer tous les graphiques d'évolution
                         with st.spinner("Génération des graphiques d'évolution..."):
                             graphs, best_period, evolution_df = create_evolution_plots(evolution_data, site_altitude)
