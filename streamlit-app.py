@@ -9,10 +9,11 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-import re  # Nécessaire pour le nouveau script d'analyse
+import requests
 import logging
 from datetime import datetime
 from retry_requests import retry
+import json
 
 # Importer les classes et fonctions du fichier principal
 from emagramme_analyzer import (
@@ -85,7 +86,55 @@ help_texts = {
     
     "subsidence": "Mouvement descendant de l'air à grande échelle, souvent associé aux anticyclones. La subsidence comprime et réchauffe l'air, créant souvent des inversions qui limitent le développement vertical des thermiques."
 }
-           
+
+
+# Fonction de géolocalisation automatique
+def get_user_location():
+    """
+    Tente d'obtenir la position géographique de l'utilisateur via une API de géolocalisation IP.
+    Retourne les coordonnées par défaut en cas d'échec.
+    """
+    default_location = {
+        "latitude": 43.271766,
+        "longitude": 5.669529,
+        "altitude": 436,
+        "city": "PCuges pey gros"
+    }
+    
+    try:
+        # Utiliser ipinfo.io pour obtenir la géolocalisation approximative
+        response = requests.get('https://ipinfo.io/json', timeout=3)
+        if response.status_code == 200:
+            data = response.json()
+            if 'loc' in data:
+                lat, lon = map(float, data['loc'].split(','))
+                city = data.get('city', 'Ville inconnue')
+                
+                # Obtenir l'altitude approximative via Open-Elevation API ou service similaire
+                try:
+                    elevation_response = requests.get(
+                        f"https://api.open-elevation.com/api/v1/lookup?locations={lat},{lon}",
+                        timeout=3
+                    )
+                    if elevation_response.status_code == 200:
+                        elevation_data = elevation_response.json()
+                        altitude = elevation_data.get('results', [{}])[0].get('elevation', 500)
+                    else:
+                        altitude = 500  # Valeur par défaut si l'API d'élévation échoue
+                except:
+                    altitude = 500  # Valeur par défaut en cas d'erreur
+                
+                return {
+                    "latitude": lat,
+                    "longitude": lon,
+                    "altitude": altitude,
+                    "city": city
+                }
+    except Exception as e:
+        logger.warning(f"Erreur lors de la géolocalisation: {e}")
+    
+    return default_location
+      
 # Fonction pour afficher l'émagramme dans Streamlit
 def display_emagramme(analyzer, analysis, llm_analysis=None):
     """Affiche l'émagramme et les résultats de l'analyse dans Streamlit"""
@@ -673,6 +722,10 @@ def show_glossary():
 
 # Interface principale
 def main():
+    # Initialiser l'état de la géolocalisation
+    if 'geolocation_attempted' not in st.session_state:
+        st.session_state.geolocation_attempted = False
+        st.session_state.user_location = None
 
     if st.sidebar.checkbox("Je découvre la météo aérologique"):
         st.sidebar.info("Tutoriel activé - vous verrez des explications supplémentaires")
@@ -704,14 +757,22 @@ def main():
         🔴 **Rouge** - Conditions défavorables ou dangereuses
         """)
 
+    # Tenter la géolocalisation automatique au premier chargement de la page
+    if not st.session_state.geolocation_attempted:
+        with st.spinner("Tentative de géolocalisation..."):
+            user_location = get_user_location()
+            st.session_state.user_location = user_location
+            st.session_state.geolocation_attempted = True
+    
     # Initialiser l'état de session si nécessaire
     if 'site_selection' not in st.session_state:
-        st.session_state.site_selection = {
-            "latitude": 45.5,
-            "longitude": 6.0,
-            "altitude": 1000,
-            "model": "arome"
-        }
+        if st.session_state.user_location:
+            st.session_state.site_selection = {
+                "latitude": st.session_state.user_location["latitude"],
+                "longitude": st.session_state.user_location["longitude"],
+                "altitude": st.session_state.user_location["altitude"],
+                "model": "meteofrance_arome_france_hd"
+            }
     
     if 'run_analysis' not in st.session_state:
         st.session_state.run_analysis = False
@@ -740,10 +801,19 @@ def main():
 
     # Modèle météo en fonction de la source de données
     if use_openmeteo:
-        model_options = ["meteofrance_arome_france_hd", "meteofrance_arpege_europe"]
+        model_options = [
+            "meteofrance_arome_france_hd", 
+            "meteofrance_arpege_europe",
+            "meteofrance_arpege_world",
+            "ecmwf_ifs04",
+            "gfs_seamless"
+        ]
         model_descriptions = {
             "meteofrance_arome_france_hd": "AROME HD (France ~2km)",
-            "meteofrance_arpege_europe": "ARPEGE (Europe ~11km)"
+            "meteofrance_arpege_europe": "ARPEGE (Europe ~11km)",
+            "meteofrance_arpege_world": "ARPEGE (Mondial ~40km)",
+            "ecmwf_ifs04": "ECMWF IFS (Mondial ~9km)",
+            "gfs_seamless": "GFS (Mondial ~25km)"
         }
         model_labels = [model_descriptions[m] for m in model_options]
         model_index = st.sidebar.selectbox(
@@ -754,7 +824,17 @@ def main():
         )
         model = model_options[model_index]
         
-        st.sidebar.info("Open-Meteo fournit un accès aux modèles Météo-France sans clé API")
+        # Informations supplémentaires selon le modèle sélectionné
+        if model == "meteofrance_arome_france_hd":
+            st.sidebar.info("AROME HD: Haute résolution (~2km) sur la France, précis pour les reliefs")
+        elif model == "meteofrance_arpege_europe":
+            st.sidebar.info("ARPEGE Europe: Résolution moyenne (~11km), bonne couverture européenne")
+        elif model == "meteofrance_arpege_world":
+            st.sidebar.info("ARPEGE Mondial: Résolution plus grossière (~40km), disponible partout dans le monde")
+        elif model == "ecmwf_ifs04":
+            st.sidebar.info("ECMWF IFS: Résolution fine pour un modèle global (~9km), performance élevée")
+        elif model == "gfs_seamless":
+            st.sidebar.info("GFS: Modèle américain, disponible mondialement, résolution ~25km")
         
         # Pas besoin de clé API pour Open-Meteo
         api_key = None
@@ -798,7 +878,7 @@ def main():
     st.sidebar.header("Temps de prévision")
     
     # Déterminer la plage de temps disponible selon le modèle
-    if model.startswith("meteofrance_arome"):
+    if model.startswith("meteofrance_arome_france_hd"):
         max_timestep = 36
         timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
                                     help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
@@ -825,23 +905,52 @@ def main():
     
     # Fonction pour définir le site et déclencher l'analyse
     def set_site_and_analyze(site_data):
+        # Convertir le modèle au nouveau format si nécessaire
+        model_conversion = {
+            "arome": "meteofrance_arome_france_hd",
+            "arpege": "meteofrance_arpege_europe",
+        }
+        
+        site_model = model_conversion.get(site_data["model"], site_data["model"])
+        
         st.session_state.site_selection = {
             "latitude": site_data["lat"],
             "longitude": site_data["lon"],
             "altitude": site_data["altitude"],
-            "model": site_data["model"]
+            "model": site_model
         }
         st.session_state.run_analysis = True
     
-    # Créer les boutons pour chaque site prédéfini
-    for i, site in enumerate(PRESET_SITES):
-        st.sidebar.button(site["name"], key=f"site_{i}", 
-                        on_click=set_site_and_analyze, 
-                        args=(site,))
+    # Organiser les sites par région
+    regions = {}
+    for site in PRESET_SITES:
+        # Classification simple basée sur la latitude/longitude
+        if site["lat"] < 44.0:
+            region = "Sud-Est"
+        elif site["lat"] < 45.0:
+            region = "Alpes du Sud"
+        elif site["lat"] < 46.0:
+            region = "Alpes du Nord"
+        else:
+            region = "Autre"
+            
+        if region not in regions:
+            regions[region] = []
+        regions[region].append(site)
+    
+    # Afficher les sites par région dans des expanders
+    for region, sites in regions.items():
+        with st.sidebar.expander(f"Sites {region}"):
+            # Créer un tableau de boutons
+            cols = st.columns(2)
+            for i, site in enumerate(sites):
+                cols[i % 2].button(site["name"], key=f"site_{region}_{i}", 
+                                 on_click=set_site_and_analyze, 
+                                 args=(site,))
     
     # Section des paramètres de localisation
     st.subheader("Localisation")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 
     with col1:
         latitude = st.number_input("Latitude", 
@@ -860,10 +969,92 @@ def main():
     with col3:
         # Altitude du site
         site_altitude = st.number_input("Altitude (m)", 
-                                      min_value=0, max_value=5000, 
-                                      value=st.session_state.site_selection["altitude"], 
-                                      step=10)
+                              min_value=0.0,  # Changé de int à float
+                              max_value=5000.0,  # Changé de int à float
+                              value=float(st.session_state.site_selection["altitude"]),  # S'assurer que c'est un float
+                              step=10.0,  # Changé de int à float
+                              format="%.1f")  # Format avec un chiffre après la virgule
+                                      
+    with col4:
+        # Bouton pour ouvrir la position dans Google Maps
+        st.write("Voir sur la carte")
+        if st.button("🗺️ Google Maps"):
+            maps_url = f"https://www.google.com/maps/search/?api=1&query={latitude},{longitude}"
+            st.markdown(f"[Ouvrir dans Google Maps]({maps_url})")
+            
+        # Bouton pour rechercher le point de décollage le plus proche
+        if st.button("🪂 Décollages proches"):
+            st.info("Recherche dans la base de données paragliding.earth en cours...")
+            # Ce serait un appel à une API ou une base de données externe
     
+
+    # Ajouter la possibilité de recherche par nom de lieu
+    with st.expander("🔍 Rechercher un lieu"):
+        search_query = st.text_input("Nom du lieu (ville, montagne, site de vol...)")
+        search_button = st.button("Rechercher")
+        
+        if search_button and search_query:
+            try:
+                with st.spinner(f"Recherche de {search_query}..."):
+                    # Utiliser Nominatim (OpenStreetMap) pour la recherche de lieux
+                    search_url = f"https://nominatim.openstreetmap.org/search?q={search_query}&format=json&limit=5"
+                    response = requests.get(search_url, headers={"User-Agent": "EmagrammeParapente/1.0"})
+                    
+                    if response.status_code == 200:
+                        results = response.json()
+                        if results:
+                            # Créer un tableau pour afficher les résultats
+                            st.write("Résultats de recherche:")
+                            
+                            for i, result in enumerate(results):
+                                col1, col2 = st.columns([3, 1])
+                                with col1:
+                                    st.write(f"{result.get('display_name', 'Lieu inconnu')}")
+                                with col2:
+                                    if st.button(f"Sélectionner", key=f"select_{i}"):
+                                        lat = float(result.get('lat', 0))
+                                        lon = float(result.get('lon', 0))
+                                        
+                                        # Tenter d'obtenir l'altitude via une API d'élévation
+                                        try:
+                                            elev_url = f"https://api.open-elevation.com/api/v1/lookup?locations={lat},{lon}"
+                                            elev_response = requests.get(elev_url, timeout=3)
+                                            if elev_response.status_code == 200:
+                                                elev_data = elev_response.json()
+                                                altitude = elev_data.get('results', [{}])[0].get('elevation', 500)
+                                            else:
+                                                altitude = 500
+                                        except:
+                                            altitude = 500
+                                        
+                                        st.session_state.site_selection = {
+                                            "latitude": lat,
+                                            "longitude": lon,
+                                            "altitude": altitude,
+                                            "model": st.session_state.site_selection["model"]
+                                        }
+                                        st.experimental_rerun()
+                        else:
+                            st.warning("Aucun résultat trouvé")
+                    else:
+                        st.error("Erreur lors de la recherche")
+            except Exception as e:
+                st.error(f"Erreur: {e}")
+
+    # Afficher le résultat de la géolocalisation s'il est disponible
+    if st.session_state.user_location and st.session_state.geolocation_attempted:
+        st.sidebar.success(f"📍 Géolocalisé: {st.session_state.user_location['city']}")
+        
+        # Bouton pour utiliser la position géolocalisée
+        if st.sidebar.button("Utiliser ma position actuelle"):
+            st.session_state.site_selection = {
+                "latitude": st.session_state.user_location["latitude"],
+                "longitude": st.session_state.user_location["longitude"],
+                "altitude": st.session_state.user_location["altitude"],
+                "model": st.session_state.site_selection["model"]  # Conserver le modèle actuel
+            }
+            st.session_state.run_analysis = True
+
     # Bouton pour lancer l'analyse (IMPORTANT: définir 'analyze_clicked' AVANT de l'utiliser)
     analyze_clicked = st.button("Analyser l'émagramme")
     
