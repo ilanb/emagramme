@@ -11,10 +11,11 @@ import pandas as pd
 import numpy as np
 import requests
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from retry_requests import retry
 import json
 from streamlit_geolocation import streamlit_geolocation
+import time
 
 # Importer les classes et fonctions du fichier principal
 from emagramme_analyzer import (
@@ -88,6 +89,20 @@ help_texts = {
     "subsidence": "Mouvement descendant de l'air à grande échelle, souvent associé aux anticyclones. La subsidence comprime et réchauffe l'air, créant souvent des inversions qui limitent le développement vertical des thermiques."
 }
 
+from enhanced_emagramme_analysis import (
+    EnhancedEmagrammeAgent,
+    analyze_emagramme_for_pilot,
+    analyze_terrain_effect,
+    detect_convergence_zones,
+    calculate_adaptive_trigger_delta,
+    identify_cloud_types,
+    analyze_valley_breeze,
+    interpolate_missing_data,
+    calculate_advanced_stability,
+    analyze_wind_profile,
+    recommend_best_takeoff_sites,
+    predict_flight_duration
+)
 
 # Fonction de géolocalisation automatique
 def get_user_location():
@@ -135,6 +150,68 @@ def get_user_location():
         logger.warning(f"Erreur lors de la géolocalisation: {e}")
     
     return default_location
+
+def display_recommended_ffvl_sites(sites, wind_direction, wind_speed, thermal_ceiling):
+    """
+    Affiche les sites FFVL recommandés en fonction des conditions météo
+    
+    Args:
+        sites: Liste des sites FFVL
+        wind_direction: Direction du vent en degrés
+        wind_speed: Vitesse du vent en km/h
+        thermal_ceiling: Plafond thermique en mètres
+    """
+    # Obtenir les recommandations
+    site_recommendations = recommend_best_takeoff_sites(
+        sites, wind_direction, wind_speed, thermal_ceiling
+    )
+    
+    if not site_recommendations["sites"]:
+        st.warning("Aucun site trouvé ou données insuffisantes pour la recommandation")
+        return
+    
+    # Afficher le résumé des conditions
+    st.subheader("Conditions pour les sites de vol")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if site_recommendations["wind_too_strong"]:
+            st.warning(f"⚠️ Vent trop fort ({wind_speed:.1f} km/h) pour un décollage optimal")
+        else:
+            st.success(f"✅ Vent favorable ({wind_speed:.1f} km/h)")
+    
+    with col2:
+        if site_recommendations["thermal_ceiling_adequate"]:
+            st.success(f"✅ Plafond thermique suffisant ({thermal_ceiling:.0f}m)")
+        else:
+            st.warning(f"⚠️ Plafond thermique bas ({thermal_ceiling:.0f}m)")
+    
+    # Afficher les sites recommandés
+    st.subheader("Sites recommandés")
+    
+    for i, site in enumerate(site_recommendations["sites"]):
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            st.markdown(f"### {i+1}. {site['site_name']}")
+            st.progress(site['score'] / 100)
+            st.markdown(f"**Score:** {site['score']:.0f}/100")
+            st.markdown(f"**Commentaire:** {site['comment']}")
+        
+        with col2:
+            st.markdown(f"**Altitude:** {site['altitude']}m")
+            st.markdown(f"**Distance:** {site['distance']} km")
+            st.markdown(f"**Difficulté:** {site['difficulty']}")
+            
+            # Bouton pour analyser à ce site
+            if st.button(f"Utiliser ce site", key=f"use_recommended_site_{i}"):
+                st.session_state.site_selection = {
+                    "latitude": site["latitude"],
+                    "longitude": site["longitude"],
+                    "altitude": float(site["altitude"]) if site["altitude"] else st.session_state.site_selection["altitude"],
+                    "model": st.session_state.site_selection["model"]
+                }
+                st.rerun()
 
 def search_ffvl_sites(lat, lon, radius=20, api_key="VOTRE_CLE_API"):
     """
@@ -252,6 +329,199 @@ def display_emagramme(analyzer, analysis, llm_analysis=None):
     fig = analyzer.plot_emagramme(analysis=analysis, llm_analysis=llm_analysis, show=False)
     st.pyplot(fig)
 
+def display_multi_tab_emagrammes(lat, lon, model, site_altitude, api_key=None, openai_key=None, 
+                            delta_t=None, data_source="open-meteo", max_hours=24, hour_step=3):
+    """
+    Affiche plusieurs émagrammes dans des onglets séparés pour différentes heures de prévision.
+    Charge automatiquement TOUS les émagrammes dès le début.
+    
+    Args:
+        lat, lon: Coordonnées du site
+        model: Modèle météo à utiliser
+        site_altitude: Altitude du site en mètres
+        api_key: Clé API pour les services météo si nécessaire
+        openai_key: Clé API OpenAI pour l'analyse IA si disponible
+        delta_t: Delta de température pour le déclenchement des thermiques
+        data_source: Source de données météo
+        max_hours: Nombre maximum d'heures à récupérer
+        hour_step: Pas de temps entre chaque prévision (en heures)
+    """
+    
+    # 1. Générer la liste des heures disponibles
+    available_hours = list(range(0, max_hours + 1, hour_step))
+    
+    # 2. Initialiser l'état de session pour les données multi-tab si pas déjà fait
+    if 'multi_tab_data' not in st.session_state:
+        # Initialiser avec toutes les clés nécessaires dès le début
+        st.session_state.multi_tab_data = {
+            'analyzers': {},
+            'analyses': {},
+            'detailed_analyses': {},
+            'last_params': {
+                'lat': lat,
+                'lon': lon,
+                'model': model,
+                'site_altitude': site_altitude,
+                'data_source': data_source
+            },
+            'total_hours': len(available_hours),
+            'hours_loaded': 0,
+            'loading_complete': False  # Initialiser à False pour déclencher le chargement
+        }
+    
+    # 3. Vérifier si les paramètres ont changé
+    params_changed = False
+    current_params = {
+        'lat': lat,
+        'lon': lon,
+        'model': model,
+        'site_altitude': site_altitude,
+        'data_source': data_source
+    }
+    
+    if current_params != st.session_state.multi_tab_data['last_params']:
+        params_changed = True
+        # Réinitialiser avec toutes les clés
+        st.session_state.multi_tab_data = {
+            'analyzers': {},
+            'analyses': {},
+            'detailed_analyses': {},
+            'last_params': current_params,
+            'total_hours': len(available_hours),
+            'hours_loaded': 0,
+            'loading_complete': False  # Réinitialiser à False pour déclencher le chargement
+        }
+    
+    # 4. Créer les onglets pour chaque heure
+    tab_names = [f"H+{h}" for h in available_hours]
+    tabs = st.tabs(tab_names)
+    
+    # 5. Fonction pour charger les données d'une heure
+    def load_hour_data(hour):
+        """Charge les données pour une heure spécifique"""
+        try:
+            # Récupérer les données depuis la source appropriée
+            analyzer, analysis, detailed_analysis = fetch_and_analyze(
+                lat, lon, model, site_altitude, api_key, openai_key, delta_t, 
+                data_source=data_source, timestep=hour
+            )
+            
+            # Vérifier si l'analyse a réussi
+            if analyzer is None or analysis is None:
+                return None, None, None
+            
+            # Stocker les résultats dans session_state
+            st.session_state.multi_tab_data['analyzers'][hour] = analyzer
+            st.session_state.multi_tab_data['analyses'][hour] = analysis
+            st.session_state.multi_tab_data['detailed_analyses'][hour] = detailed_analysis
+            st.session_state.multi_tab_data['hours_loaded'] += 1
+            
+            return analyzer, analysis, detailed_analysis
+                
+        except Exception as e:
+            return None, None, None
+    
+    # 6. Charger toutes les heures si ce n'est pas déjà fait
+    progress_placeholder = st.empty()
+    progress_bar_placeholder = st.empty()
+    
+    # Vérifier si le chargement est nécessaire - utiliser get() pour éviter KeyError
+    loading_complete = st.session_state.multi_tab_data.get('loading_complete', False)
+    
+    if not loading_complete or params_changed:
+        # Afficher une barre de progression
+        hours_to_load = [h for h in available_hours if h not in st.session_state.multi_tab_data['analyzers']]
+        if hours_to_load:
+            progress_placeholder.info(f"Chargement des émagrammes pour toutes les heures... ({len(hours_to_load)} restants)")
+            progress_bar = progress_bar_placeholder.progress(0)
+            
+            # Charger les données pour chaque heure
+            for i, hour in enumerate(hours_to_load):
+                progress = int((i / len(hours_to_load)) * 100)
+                progress_bar.progress(progress)
+                progress_placeholder.info(f"Chargement de l'émagramme pour H+{hour} ({i+1}/{len(hours_to_load)})...")
+                
+                # Charger les données
+                load_hour_data(hour)
+                
+            # Finaliser
+            progress_bar.progress(100)
+            st.session_state.multi_tab_data['loading_complete'] = True
+            
+    # Effacer les messages de progrès une fois terminé
+    if st.session_state.multi_tab_data.get('loading_complete', False):
+        progress_placeholder.empty()
+        progress_bar_placeholder.empty()
+    
+    # 7. Initialiser un analyzer par défaut pour le retour
+    analyzer_0 = None
+    analysis_0 = None 
+    detailed_analysis_0 = None
+    
+    # 8. Afficher le contenu dans chaque onglet
+    for i, hour in enumerate(available_hours):
+        with tabs[i]:
+            now = datetime.now()
+            forecast_time = now + timedelta(hours=hour)
+            st.info(f"Prévision pour le {forecast_time.strftime('%d/%m/%Y à %H:%M')} (H+{hour})")
+            
+            # Afficher l'émagramme si disponible
+            if hour in st.session_state.multi_tab_data['analyzers']:
+                analyzer = st.session_state.multi_tab_data['analyzers'][hour]
+                analysis = st.session_state.multi_tab_data['analyses'][hour]
+                detailed_analysis = st.session_state.multi_tab_data['detailed_analyses'][hour]
+                
+                # Mémoriser les données de la première heure pour le retour
+                if i == 0:
+                    analyzer_0 = analyzer
+                    analysis_0 = analysis
+                    detailed_analysis_0 = detailed_analysis
+                
+                # Afficher l'émagramme
+                st.subheader(f"Émagramme pour H+{hour}")
+                display_emagramme(analyzer, analysis, detailed_analysis)
+                
+                # Afficher d'autres informations supplémentaires
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Plafond thermique", f"{analysis.thermal_ceiling:.0f} m")
+                
+                with col2:
+                    st.metric("Force des thermiques", analysis.thermal_strength)
+                
+                with col3:
+                    if hasattr(analysis, 'thermal_type') and analysis.thermal_type == "Cumulus":
+                        st.metric("Base des nuages", f"{analysis.cloud_base:.0f} m")
+                    else:
+                        st.metric("Type de thermiques", "Bleus (sans condensation)")
+                
+                # Expander pour l'analyse détaillée
+                with st.expander("Analyse détaillée", expanded=False):
+                    if detailed_analysis:
+                        st.markdown(detailed_analysis)
+                    else:
+                        st.info("Pas d'analyse détaillée disponible")
+            else:
+                # Afficher un message d'erreur si les données ne sont pas disponibles
+                st.error(f"Impossible de charger les données pour H+{hour}. Essayez de rafraîchir la page.")
+    
+    # Bouton de rafraîchissement en bas des onglets
+    if st.button("Rafraîchir toutes les données", key="refresh_all_emagrammes"):
+        # Réinitialiser les données
+        st.session_state.multi_tab_data = {
+            'analyzers': {},
+            'analyses': {},
+            'detailed_analyses': {},
+            'last_params': current_params,
+            'total_hours': len(available_hours),
+            'hours_loaded': 0,
+            'loading_complete': False
+        }
+        st.rerun()
+    
+    # Retourner les données de la première heure pour compatibilité
+    return analyzer_0, analysis_0, detailed_analysis_0
+
 def calculate_convective_layer_thickness(analyzer, analysis):
     """Calcule et visualise l'épaisseur de la couche convective"""
     
@@ -366,8 +636,7 @@ def fetch_and_analyze(lat, lon, model, site_altitude, api_key=None, openai_key=N
     try:
         if data_source == "open-meteo":
             with st.spinner(f"Récupération des données météo via Open-Meteo (pour H+{timestep})..."):
-                st.info("Utilisation d'Open-Meteo (sans clé API)")
-                
+
                 levels = None
                 evolution_data = None
                 
@@ -851,6 +1120,10 @@ def show_glossary():
 def main():
     sidebar_analyze_clicked = False
     main_analyze_clicked = False
+    analyzer = None
+    analysis = None
+    detailed_analysis = None
+    evolution_data = None
 
     # Initialiser l'état de la géolocalisation
     if 'geolocation_attempted' not in st.session_state:
@@ -1138,14 +1411,18 @@ def main():
     # Paramètres avancés
     with st.sidebar.expander("Paramètres avancés"):
         delta_t = st.slider("Delta T de déclenchement (°C)", 
-                         min_value=1.0, max_value=6.0, value=3.0, step=0.5,
-                         help="Différence de température requise pour déclencher un thermique")
+                        min_value=1.0, max_value=6.0, value=3.0, step=0.5,
+                        help="Différence de température requise pour déclencher un thermique")
 
-        # Nouvelle option pour l'évolution temporelle
+        # Option pour l'évolution temporelle
         fetch_evolution_enabled = st.checkbox("Afficher l'évolution des conditions", value=True,
-                                   help="Récupère les données depuis l'heure actuelle jusqu'à l'heure de prévision sélectionnée et affiche des graphiques d'évolution")
+                                help="Récupère les données depuis l'heure actuelle jusqu'à l'heure de prévision sélectionnée")
         
-        if fetch_evolution_enabled:
+        # Ajouter cette nouvelle option spécifique pour le mode multi-horaire avec slider
+        use_multi_hour = st.checkbox("Mode multi-horaire avec slider", value=False,
+                                help="Affiche un slider pour naviguer entre différentes heures de prévision")
+        
+        if fetch_evolution_enabled or use_multi_hour:
             col1, col2 = st.columns(2)
             with col1:
                 evolution_hours = st.slider("Période d'évolution (heures)", 
@@ -1169,6 +1446,46 @@ def main():
         # Sauvegarder la clé API dans session_state
         if ffvl_api_key:
             st.session_state.ffvl_api_key = ffvl_api_key
+        
+        st.subheader("Type de surface")
+        surface_type = st.selectbox(
+            "Type de terrain dominant",
+            options=["urban", "dark_rock", "light_rock", "dry_soil", "grass", "forest", "water", "sand", "snow"],
+            format_func=lambda x: {
+                "urban": "Zone urbaine", 
+                "dark_rock": "Roches sombres", 
+                "light_rock": "Roches claires", 
+                "dry_soil": "Sol sec", 
+                "grass": "Prairie/Végétation", 
+                "forest": "Forêt", 
+                "water": "Plan d'eau", 
+                "sand": "Sable", 
+                "snow": "Neige"
+            }[x],
+            index=4  # Grass par défaut
+        )
+        
+        # Calculer le delta_t adaptatif
+        if 'ground_temperature' in locals() and 'wind_speed' in locals() and 'cloud_cover' in locals():
+            adaptive_delta = calculate_adaptive_trigger_delta(
+                surface_type, 
+                ground_temperature, 
+                wind_speed,
+                cloud_cover
+            )
+            
+            # Afficher le calcul adaptatif
+            st.info(f"Delta T adaptatif calculé: {adaptive_delta:.1f}°C")
+            
+            # Permettre à l'utilisateur de choisir entre valeur fixe et adaptative
+            use_adaptive = st.checkbox("Utiliser le delta T adaptatif", value=True)
+            
+            if use_adaptive:
+                delta_t = adaptive_delta
+            else:
+                delta_t = st.slider("Delta T de déclenchement (°C)", 
+                                min_value=1.0, max_value=6.0, value=3.0, step=0.5, key="slider_delta_t",
+                                help="Différence de température requise pour déclencher un thermique")
 
     # Section pour le pas de temps de prévision (nouveau)
     st.sidebar.header("Temps de prévision")
@@ -1383,62 +1700,80 @@ def main():
         st.session_state.run_analysis = False
         
         if use_openmeteo and not api_key:
-            # Déterminer la source de données pour la fonction fetch_and_analyze
+            # Déterminer la source de données
             data_source_str = "open-meteo"
             
-            # Récupérer et analyser les données (modifié pour l'évolution)
-            if fetch_evolution_enabled:
-                with st.spinner(f"Récupération des données d'évolution sur {evolution_hours}h..."):
-                    analyzer, analysis, detailed_analysis, evolution_data = fetch_and_analyze(
-                        latitude, longitude, model, site_altitude, api_key, openai_key, delta_t, 
-                        data_source=data_source_str, timestep=timestep,
-                        fetch_evolution=True, evolution_hours=evolution_hours, evolution_step=evolution_step
-                    )
-            else:
-                analyzer, analysis, detailed_analysis = fetch_and_analyze(
-                    latitude, longitude, model, site_altitude, api_key, openai_key, delta_t, 
-                    data_source=data_source_str, timestep=timestep
+            # Vérifier si on utilise le mode multi-horaire avec slider
+            if use_multi_hour:
+                # Générer automatiquement tous les émagrammes
+                st.subheader("Prévisions par heure")
+                analyzer, analysis, detailed_analysis = display_multi_tab_emagrammes(
+                    latitude, longitude, model, site_altitude, 
+                    api_key, openai_key, delta_t, 
+                    data_source=data_source_str, 
+                    max_hours=evolution_hours, 
+                    hour_step=evolution_step
                 )
+                
+                # Définir evolution_data à None puisque nous utilisons une autre approche
                 evolution_data = None
+            else:
+                # Mode standard avec ou sans évolution - conservé tel quel
+                if fetch_evolution_enabled:
+                    with st.spinner(f"Récupération des données d'évolution sur {evolution_hours}h..."):
+                        analyzer, analysis, detailed_analysis, evolution_data = fetch_and_analyze(
+                            latitude, longitude, model, site_altitude, api_key, openai_key, delta_t, 
+                            data_source=data_source_str, timestep=timestep,
+                            fetch_evolution=True, evolution_hours=evolution_hours, evolution_step=evolution_step
+                        )
+                else:
+                    analyzer, analysis, detailed_analysis = fetch_and_analyze(
+                        latitude, longitude, model, site_altitude, api_key, openai_key, delta_t, 
+                        data_source=data_source_str, timestep=timestep
+                    )
+                    evolution_data = None
             
             # Si l'analyse est réussie, afficher les résultats
             if analyzer and analysis:
-                # Afficher l'émagramme
-                st.subheader("Émagramme")
-                display_emagramme(analyzer, analysis)
-                
-                # Calculer l'information sur la couche convective
-                convective_layer = calculate_convective_layer_thickness(analyzer, analysis)
-                
-                # Créer et afficher la visualisation de la couche convective directement sous l'émagramme
-                st.subheader("Visualisation de la couche convective")
-                
-                # Explication de la couche convective (dans un expander pour ne pas prendre trop de place)
-                with st.expander("📚 Qu'est-ce que la couche convective ?"):
-                    st.markdown("""
-                    La couche convective est la partie de l'atmosphère où se produisent les mouvements verticaux 
-                    (ascendants et descendants) de l'air. C'est dans cette couche que se forment les thermiques
-                    exploitables pour le vol en parapente.
+                # Pour le mode multi-horaire, ne pas afficher à nouveau l'émagramme
+                # car il est déjà affiché dans la fonction display_multi_hour_emagramme
+                if not use_multi_hour:
+                    # Afficher l'émagramme (uniquement en mode standard)
+                    st.subheader("Émagramme")
+                    display_emagramme(analyzer, analysis)
                     
-                    Caractéristiques principales:
-                    - S'étend du sol jusqu'au plafond thermique
-                    - Présente un gradient de température d'environ 1°C/100m
-                    - La turbulence y est plus importante qu'en dehors
-                    - Plus elle est épaisse, plus le plafond des thermiques est élevé
-                    """)
+                    # Calculer l'information sur la couche convective
+                    convective_layer = calculate_convective_layer_thickness(analyzer, analysis)
+                    
+                    # Créer et afficher la visualisation de la couche convective
+                    st.subheader("Visualisation de la couche convective")
+                    
+                    # Explication de la couche convective (dans un expander)
+                    with st.expander("📚 Qu'est-ce que la couche convective ?"):
+                        st.markdown("""
+                        La couche convective est la partie de l'atmosphère où se produisent les mouvements verticaux 
+                        (ascendants et descendants) de l'air. C'est dans cette couche que se forment les thermiques
+                        exploitables pour le vol en parapente.
+                        
+                        Caractéristiques principales:
+                        - S'étend du sol jusqu'au plafond thermique
+                        - Présente un gradient de température d'environ 1°C/100m
+                        - La turbulence y est plus importante qu'en dehors
+                        - Plus elle est épaisse, plus le plafond des thermiques est élevé
+                        """)
+                    
+                    # Afficher les informations de la couche convective
+                    cols = st.columns([2, 1])
+                    with cols[0]:
+                        st.metric("Épaisseur de la couche convective", f"{convective_layer['thickness']:.0f} m")
+                        st.write(f"**Qualité des ascendances**: {convective_layer['description']}")
+                    
+                    with cols[1]:
+                        # Créer et afficher le graphique de la couche convective
+                        fig = create_convective_layer_plot(analysis, analysis.inversion_layers)
+                        st.pyplot(fig)
                 
-                # Afficher les informations de la couche convective
-                cols = st.columns([2, 1])
-                with cols[0]:
-                    st.metric("Épaisseur de la couche convective", f"{convective_layer['thickness']:.0f} m")
-                    st.write(f"**Qualité des ascendances**: {convective_layer['description']}")
-                
-                with cols[1]:
-                    # Créer et afficher le graphique de la couche convective
-                    fig = create_convective_layer_plot(analysis, analysis.inversion_layers)
-                    st.pyplot(fig)
-                
-                # Onglets pour le reste des informations
+                # Création des onglets (commun à tous les modes)
                 if fetch_evolution_enabled and evolution_data:
                     # Vérifier si une erreur est signalée
                     if "error" in evolution_data:
@@ -1453,193 +1788,246 @@ def main():
                         # Vérifier si les graphiques ont été créés avec succès
                         if not graphs or not best_period or "time" not in best_period:
                             st.warning("Impossible de générer les graphiques d'évolution. Données insuffisantes.")
-                    tab1, tab2, tab3, tab4 = st.tabs(["Résultats", "Évolution et Données brutes", "Sites FFVL", "Aide"])
-                else:
-                    tab1, tab2, tab3, tab4 = st.tabs(["Résultats", "Données brutes", "Sites FFVL", "Aide"])
-                
-                with tab1:
-                    st.subheader("Analyse des mouvements d'air verticaux")
-
-                    # Option pour l'orientation de la pente
-                    site_slope = st.slider("Orientation de la pente de décollage (degrés)", 0, 359, 135, 
-                                        help="0° = Nord, 90° = Est, 180° = Sud, 270° = Ouest")
-
-                    air_movement = analyze_anabatic_vs_thermal(analysis, site_altitude, site_slope)
-
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        st.write("**Vents anabatiques**")
-                        
-                        # Remplacer le bouton par un expander
-                        with st.expander("📚 Différence entre vent anabatique et thermique"):
-                            st.markdown("""
-                            **Vents anabatiques** : Mouvements d'air qui remontent les pentes, généralement faibles (1-3 m/s), 
-                            restent collés au relief et suivent précisément le contour de la montagne.
-                            
-                            **Thermiques** : Colonnes d'air ascendantes qui se détachent du sol, peuvent être beaucoup plus 
-                            puissantes (jusqu'à 5-8 m/s) et montent verticalement jusqu'au sommet de la couche convective.
-                            """)
-                            
-                        st.metric("Force estimée", f"{air_movement['anabatic']['strength']:.1f} m/s")
-                        st.write(f"Développement: {air_movement['anabatic']['development']}")
-                        st.write(f"Période favorable: {air_movement['anabatic']['time_window']}")
-
-                    with col2:
-                        st.write("**Thermiques**")
-                        st.metric("Force", analysis.thermal_strength)
-                        st.write(f"Détachement: {air_movement['thermal']['detachment_description']}")
-                        st.write(f"Altitude estimation formation: {air_movement['thermal']['formation_altitude']:.0f}m")
-
-                    st.info(f"**Stratégie recommandée**: {air_movement['recommendation']}")
-
-                    # Vérifier d'abord si le vol est impossible
-                    vol_impossible = (analysis.precipitation_type is not None and analysis.precipitation_type != 0)
-
-                    # Vérifier si le vent dans la zone de vol est trop fort (déjà calculé dans l'analyseur)
-                    if hasattr(analyzer, 'vol_impossible_wind') and analyzer.vol_impossible_wind:
-                        vol_impossible = True
-                        raisons = [f"Vent trop fort dans la zone de vol ({analyzer.max_wind_in_vol_zone:.1f} km/h)"]
-                    elif (analysis.precipitation_type is not None and analysis.precipitation_type != 0):
-                        raisons = [analysis.precipitation_description]
+                    
+                    if not use_multi_hour:
+                        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Résultats", "Évolution et Données brutes", "Sites FFVL", "Aide", "Analyse avancée"])
+                        # Variable pour suivre si les tabs sont créés
+                        has_tab1 = True
                     else:
-                        raisons = []
+                        # En mode multi-horaire, ne pas créer le premier onglet
+                        tab2, tab3, tab4, tab5 = st.tabs(["Évolution et Données brutes", "Sites FFVL", "Aide", "Analyse avancée"])
+                        # Indiquer que tab1 n'est pas disponible
+                        has_tab1 = False
+                else:
+                    if not use_multi_hour:
+                        tab1, tab2, tab3, tab4 = st.tabs(["Résultats", "Données brutes", "Sites FFVL", "Aide"])
+                        has_tab1 = True
+                    else:
+                        tab2, tab3, tab4 = st.tabs(["Données brutes", "Sites FFVL", "Aide"])
+                        has_tab1 = False
+ 
+                if 'has_tab1' in locals() and has_tab1:
+                    with tab1:
+                        st.subheader("Analyse des mouvements d'air verticaux")
 
-                    if vol_impossible:
-                        # Utiliser un style d'alerte visuelle différent
-                        st.error("⚠️ VOL IMPOSSIBLE - Conditions météorologiques dangereuses")
-                        
-                        # Afficher la raison principale
-                        st.error(f"Raison: {', '.join(raisons)}")
-                        
-                        # Limiter ce qui est affiché dans l'interface
-                        with st.expander("Détails des conditions"):
-                            st.warning(analysis.flight_conditions)
-                            st.warning(analysis.wind_conditions)
+                        # Option pour l'orientation de la pente
+                        site_slope = st.slider("Orientation de la pente de décollage (degrés)", 0, 359, 135, 
+                                            help="0° = Nord, 90° = Est, 180° = Sud, 270° = Ouest")
+
+                        air_movement = analyze_anabatic_vs_thermal(analysis, site_altitude, site_slope)
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            st.write("**Vents anabatiques**")
                             
+                            # Remplacer le bouton par un expander
+                            with st.expander("📚 Différence entre vent anabatique et thermique"):
+                                st.markdown("""
+                                **Vents anabatiques** : Mouvements d'air qui remontent les pentes, généralement faibles (1-3 m/s), 
+                                restent collés au relief et suivent précisément le contour de la montagne.
+                                
+                                **Thermiques** : Colonnes d'air ascendantes qui se détachent du sol, peuvent être beaucoup plus 
+                                puissantes (jusqu'à 5-8 m/s) et montent verticalement jusqu'au sommet de la couche convective.
+                                """)
+                                
+                            st.metric("Force estimée", f"{air_movement['anabatic']['strength']:.1f} m/s")
+                            st.write(f"Développement: {air_movement['anabatic']['development']}")
+                            st.write(f"Période favorable: {air_movement['anabatic']['time_window']}")
+
+                        with col2:
+                            st.write("**Thermiques**")
+                            st.metric("Force", analysis.thermal_strength)
+                            st.write(f"Détachement: {air_movement['thermal']['detachment_description']}")
+                            st.write(f"Altitude estimation formation: {air_movement['thermal']['formation_altitude']:.0f}m")
+
+                        st.info(f"**Stratégie recommandée**: {air_movement['recommendation']}")
+
+                        # Vérifier d'abord si le vol est impossible
+                        vol_impossible = (analysis.precipitation_type is not None and analysis.precipitation_type != 0)
+
+                        # Vérifier si le vent dans la zone de vol est trop fort (déjà calculé dans l'analyseur)
+                        if hasattr(analyzer, 'vol_impossible_wind') and analyzer.vol_impossible_wind:
+                            vol_impossible = True
+                            raisons = [f"Vent trop fort dans la zone de vol ({analyzer.max_wind_in_vol_zone:.1f} km/h)"]
+                        elif (analysis.precipitation_type is not None and analysis.precipitation_type != 0):
+                            raisons = [analysis.precipitation_description]
+                        else:
+                            raisons = []
+
+                        if vol_impossible:
+                            # Utiliser un style d'alerte visuelle différent
+                            st.error("⚠️ VOL IMPOSSIBLE - Conditions météorologiques dangereuses")
+                            
+                            # Afficher la raison principale
+                            st.error(f"Raison: {', '.join(raisons)}")
+                            
+                            # Limiter ce qui est affiché dans l'interface
+                            with st.expander("Détails des conditions"):
+                                st.warning(analysis.flight_conditions)
+                                st.warning(analysis.wind_conditions)
+                                
+                                if analysis.hazards:
+                                    st.subheader("⚠️ Dangers spécifiques")
+                                    for hazard in analysis.hazards:
+                                        st.warning(hazard)
+                        else:
+                            # Affichage normal pour les conditions volables
+                            st.subheader("Informations générales")
+                            
+                            # Afficher le modèle et l'heure de prévision
+                            forecast_time = ""
+                            if "H+" in analysis.model_name:
+                                model_parts = analysis.model_name.split("H+")
+                                model_name = model_parts[0].strip()
+                                hour = int(model_parts[1])
+                                days = hour // 24
+                                remaining_hours = hour % 24
+                                if days > 0:
+                                    forecast_time = f" - Prévision pour J+{days}, {remaining_hours}h"
+                                else:
+                                    forecast_time = f" - Prévision pour H+{hour}"
+
+                            model_name = analysis.model_name if hasattr(analysis, 'model_name') and analysis.model_name else "inconnu"
+                            st.info(f"Modèle météo utilisé: {model_name.upper()}{forecast_time}")
+
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Altitude du site", f"{analysis.ground_altitude:.0f} m")
+                                st.metric("Température au sol", f"{analysis.ground_temperature:.1f} °C")
+                                st.metric("Point de rosée", f"{analysis.ground_dew_point:.1f} °C")
+                                
+                            with col2:
+                                st.metric("Plafond thermique", f"{analysis.thermal_ceiling:.0f} m")
+                                st.metric("Gradient thermique", f"{analysis.thermal_gradient:.1f} °C/1000m")
+                                st.metric("Force des thermiques", analysis.thermal_strength)
+                                
+                            with col3:
+                                st.metric("Stabilité", analysis.stability)
+                                if analysis.thermal_type == "Cumulus":
+                                    st.metric("Base des nuages", f"{analysis.cloud_base:.0f} m")
+                                    st.metric("Sommet des nuages", f"{analysis.cloud_top:.0f} m")
+                                else:
+                                    st.info("Thermiques bleus (pas de condensation)")
+                        
+                        # Analyse des inversions (si présentes)
+                        if analysis.inversion_layers:
+                            st.subheader("Analyse des inversions")
+                            
+                            # Explication des inversions dans un expander
+                            with st.expander("📚 Comment les inversions affectent-elles le vol ?"):
+                                st.markdown("""
+                                Une **inversion thermique** est une couche d'air où la température augmente avec l'altitude, 
+                                contrairement à la situation normale où la température diminue en montant.
+                                
+                                ### Impact sur le vol en parapente :
+                                
+                                - **Blocage des thermiques** : Les inversions agissent comme un "couvercle" qui stoppe 
+                                l'ascension des thermiques, limitant ainsi la hauteur maximale de vol.
+                                
+                                - **Stabilisation de l'air** : L'air est plus stable dans une inversion, réduisant 
+                                la probabilité de formation de turbulences et de thermiques.
+                                
+                                - **Accumulation d'humidité** : Les inversions peuvent piéger l'humidité sous elles, 
+                                créant des couches de nuages stratiformes.
+                                
+                                - **Position critique** : Une inversion basse (< 1500m) est particulièrement limitante 
+                                car elle réduit considérablement le volume d'air exploitable pour le vol.
+                                """)
+                            
+                            # Analyse des inversions
+                            inversion_analysis = analyze_inversions_impact(analysis)
+                            
+                            for i, inv in enumerate(inversion_analysis["inversions"]):
+                                if inv["severity"] == "critical":
+                                    st.error(f"Inversion {i+1}: De {inv['base']:.0f}m à {inv['top']:.0f}m - {inv['impact']}")
+                                elif inv["severity"] == "warning":
+                                    st.warning(f"Inversion {i+1}: De {inv['base']:.0f}m à {inv['top']:.0f}m - {inv['impact']}")
+                                else:
+                                    st.info(f"Inversion {i+1}: De {inv['base']:.0f}m à {inv['top']:.0f}m - {inv['impact']}")
+                            
+                            # Afficher les informations sur les nuages si disponibles
+                            if (analysis.low_cloud_cover is not None or 
+                                analysis.mid_cloud_cover is not None or 
+                                analysis.high_cloud_cover is not None):
+                                
+                                st.subheader("Couverture nuageuse")
+                                cols = st.columns(3)
+                                with cols[0]:
+                                    if analysis.low_cloud_cover is not None:
+                                        st.metric("Nuages bas", f"{analysis.low_cloud_cover:.0f}%")
+                                        
+                                with cols[1]:
+                                    if analysis.mid_cloud_cover is not None:
+                                        st.metric("Nuages moyens", f"{analysis.mid_cloud_cover:.0f}%")
+                                        
+                                with cols[2]:
+                                    if analysis.high_cloud_cover is not None:
+                                        st.metric("Nuages hauts", f"{analysis.high_cloud_cover:.0f}%")
+                            
+                            # Afficher les informations sur les précipitations si disponibles
+                            if analysis.precipitation_type is not None:
+                                st.subheader("Précipitations")
+                                st.info(f"{analysis.precipitation_description}")
+                            
+                            # Conditions de vol
+                            st.subheader("Conditions de vol")
+                            st.write(analysis.flight_conditions)
+                            
+                            # Conditions de vent
+                            st.subheader("Conditions de vent")
+                            st.write(analysis.wind_conditions)
+                            
+                            # Risques
                             if analysis.hazards:
-                                st.subheader("⚠️ Dangers spécifiques")
+                                st.subheader("⚠️ Risques identifiés")
                                 for hazard in analysis.hazards:
                                     st.warning(hazard)
-                    else:
-                        # Affichage normal pour les conditions volables
-                        st.subheader("Informations générales")
-                        
-                        # Afficher le modèle et l'heure de prévision
-                        forecast_time = ""
-                        if "H+" in analysis.model_name:
-                            model_parts = analysis.model_name.split("H+")
-                            model_name = model_parts[0].strip()
-                            hour = int(model_parts[1])
-                            days = hour // 24
-                            remaining_hours = hour % 24
-                            if days > 0:
-                                forecast_time = f" - Prévision pour J+{days}, {remaining_hours}h"
-                            else:
-                                forecast_time = f" - Prévision pour H+{hour}"
-
-                        model_name = analysis.model_name if hasattr(analysis, 'model_name') and analysis.model_name else "inconnu"
-                        st.info(f"Modèle météo utilisé: {model_name.upper()}{forecast_time}")
-
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Altitude du site", f"{analysis.ground_altitude:.0f} m")
-                            st.metric("Température au sol", f"{analysis.ground_temperature:.1f} °C")
-                            st.metric("Point de rosée", f"{analysis.ground_dew_point:.1f} °C")
                             
-                        with col2:
-                            st.metric("Plafond thermique", f"{analysis.thermal_ceiling:.0f} m")
-                            st.metric("Gradient thermique", f"{analysis.thermal_gradient:.1f} °C/1000m")
-                            st.metric("Force des thermiques", analysis.thermal_strength)
-                            
-                        with col3:
-                            st.metric("Stabilité", analysis.stability)
-                            if analysis.thermal_type == "Cumulus":
-                                st.metric("Base des nuages", f"{analysis.cloud_base:.0f} m")
-                                st.metric("Sommet des nuages", f"{analysis.cloud_top:.0f} m")
-                            else:
-                                st.info("Thermiques bleus (pas de condensation)")
+                            # Équipement recommandé
+                            if analysis.recommended_gear:
+                                st.subheader("Équipement recommandé")
+                                for gear in analysis.recommended_gear:
+                                    st.write(f"- {gear}")
                     
-                    # Analyse des inversions (si présentes)
-                    if analysis.inversion_layers:
-                        st.subheader("Analyse des inversions")
-                        
-                        # Explication des inversions dans un expander
-                        with st.expander("📚 Comment les inversions affectent-elles le vol ?"):
-                            st.markdown("""
-                            Une **inversion thermique** est une couche d'air où la température augmente avec l'altitude, 
-                            contrairement à la situation normale où la température diminue en montant.
-                            
-                            ### Impact sur le vol en parapente :
-                            
-                            - **Blocage des thermiques** : Les inversions agissent comme un "couvercle" qui stoppe 
-                            l'ascension des thermiques, limitant ainsi la hauteur maximale de vol.
-                            
-                            - **Stabilisation de l'air** : L'air est plus stable dans une inversion, réduisant 
-                            la probabilité de formation de turbulences et de thermiques.
-                            
-                            - **Accumulation d'humidité** : Les inversions peuvent piéger l'humidité sous elles, 
-                            créant des couches de nuages stratiformes.
-                            
-                            - **Position critique** : Une inversion basse (< 1500m) est particulièrement limitante 
-                            car elle réduit considérablement le volume d'air exploitable pour le vol.
-                            """)
-                        
-                        # Analyse des inversions
-                        inversion_analysis = analyze_inversions_impact(analysis)
-                        
-                        for i, inv in enumerate(inversion_analysis["inversions"]):
-                            if inv["severity"] == "critical":
-                                st.error(f"Inversion {i+1}: De {inv['base']:.0f}m à {inv['top']:.0f}m - {inv['impact']}")
-                            elif inv["severity"] == "warning":
-                                st.warning(f"Inversion {i+1}: De {inv['base']:.0f}m à {inv['top']:.0f}m - {inv['impact']}")
-                            else:
-                                st.info(f"Inversion {i+1}: De {inv['base']:.0f}m à {inv['top']:.0f}m - {inv['impact']}")
-                        
-                        # Afficher les informations sur les nuages si disponibles
-                        if (analysis.low_cloud_cover is not None or 
-                            analysis.mid_cloud_cover is not None or 
-                            analysis.high_cloud_cover is not None):
-                            
-                            st.subheader("Couverture nuageuse")
-                            cols = st.columns(3)
-                            with cols[0]:
-                                if analysis.low_cloud_cover is not None:
-                                    st.metric("Nuages bas", f"{analysis.low_cloud_cover:.0f}%")
+                            # Analyse des types de nuages
+                            if (analysis.low_cloud_cover is not None or 
+                                analysis.mid_cloud_cover is not None or 
+                                analysis.high_cloud_cover is not None):
+                                
+                                st.subheader("Analyse des nuages")
+                                
+                                # Identifier les types de nuages
+                                cloud_analysis = identify_cloud_types(
+                                    analysis.low_cloud_cover, 
+                                    analysis.mid_cloud_cover, 
+                                    analysis.high_cloud_cover,
+                                    analysis.thermal_ceiling,
+                                    analysis.ground_temperature,
+                                    analysis.ground_dew_point,
+                                    analysis.precipitation_type
+                                )
+                                
+                                # Afficher les types de nuages identifiés
+                                cloud_types = cloud_analysis["identified_types"]
+                                
+                                if cloud_types:
+                                    for cloud in cloud_types:
+                                        if cloud["severity"] == "extreme":
+                                            st.error(f"**{cloud['type']}** ({cloud['coverage']}%) - {cloud['impact']}")
+                                        elif cloud["severity"] == "high":
+                                            st.warning(f"**{cloud['type']}** ({cloud['coverage']}%) - {cloud['impact']}")
+                                        elif cloud["severity"] == "medium":
+                                            st.info(f"**{cloud['type']}** ({cloud['coverage']}%) - {cloud['impact']}")
+                                        else:
+                                            st.success(f"**{cloud['type']}** ({cloud['coverage']}%) - {cloud['impact']}")
                                     
-                            with cols[1]:
-                                if analysis.mid_cloud_cover is not None:
-                                    st.metric("Nuages moyens", f"{analysis.mid_cloud_cover:.0f}%")
-                                    
-                            with cols[2]:
-                                if analysis.high_cloud_cover is not None:
-                                    st.metric("Nuages hauts", f"{analysis.high_cloud_cover:.0f}%")
-                        
-                        # Afficher les informations sur les précipitations si disponibles
-                        if analysis.precipitation_type is not None:
-                            st.subheader("Précipitations")
-                            st.info(f"{analysis.precipitation_description}")
-                        
-                        # Conditions de vol
-                        st.subheader("Conditions de vol")
-                        st.write(analysis.flight_conditions)
-                        
-                        # Conditions de vent
-                        st.subheader("Conditions de vent")
-                        st.write(analysis.wind_conditions)
-                        
-                        # Risques
-                        if analysis.hazards:
-                            st.subheader("⚠️ Risques identifiés")
-                            for hazard in analysis.hazards:
-                                st.warning(hazard)
-                        
-                        # Équipement recommandé
-                        if analysis.recommended_gear:
-                            st.subheader("Équipement recommandé")
-                            for gear in analysis.recommended_gear:
-                                st.write(f"- {gear}")
-                
+                                    # Afficher le risque d'orage si pertinent
+                                    if cloud_analysis["thunderstorm_risk"]:
+                                        st.error(f"⚠️ **Risque d'orages {cloud_analysis['thunderstorm_proximity']}** - Soyez extrêmement vigilant")
+                                else:
+                                    st.info("Aucun nuage significatif identifié")
+
                 if fetch_evolution_enabled and evolution_data and "tab2" in locals():
                     with tab2:
                         st.header("Évolution des conditions sur la période")
@@ -1797,6 +2185,13 @@ def main():
                         search_radius = st.slider("Rayon de recherche (km)", 5, 100, 20, 5)
                         st.info("Une plus grande distance augmente le temps de recherche")
                     
+                    # Option pour choisir le mode d'affichage
+                    display_mode = st.radio(
+                        "Mode d'affichage des sites",
+                        options=["Standard", "Recommandations basées sur les conditions actuelles"],
+                        index=0
+                    )
+
                     if st.button("Rechercher des sites FFVL", key="search_ffvl"):
                         with st.spinner("Recherche des sites FFVL..."):
                             sites = search_ffvl_sites(
@@ -1809,57 +2204,75 @@ def main():
                             if sites:
                                 st.success(f"{len(sites)} sites trouvés")
                                 
-                                # Créer un DataFrame pour affichage
-                                sites_df = pd.DataFrame(sites)
-                                sites_display = sites_df[["name", "type", "distance", "altitude", "orientation", "difficulty"]].copy()
-                                sites_display.columns = ["Nom", "Type", "Distance (km)", "Altitude (m)", "Orientation", "Difficulté"]
-                                
-                                st.dataframe(sites_display)
-                                
-                                # Afficher une carte avec les sites
-                                import folium
-                                from streamlit_folium import folium_static
-                                
-                                m = folium.Map(location=[ffvl_lat, ffvl_lon], zoom_start=10)
-                                
-                                # Ajouter le point central
-                                folium.Marker(
-                                    [ffvl_lat, ffvl_lon],
-                                    popup="Position de référence",
-                                    icon=folium.Icon(color="red", icon="info-sign")
-                                ).add_to(m)
-                                
-                                # Ajouter les sites
-                                for site in sites:
-                                    icon_color = "green"
-                                    if "difficile" in site.get("difficulty", "").lower():
-                                        icon_color = "red"
-                                    elif "confirmé" in site.get("difficulty", "").lower():
-                                        icon_color = "orange"
+                                # Choisir le mode d'affichage
+                                if display_mode == "Standard":
+                                    # Utiliser la fonction d'affichage existante
+                                    # Créer un DataFrame pour affichage
+                                    sites_df = pd.DataFrame(sites)
+                                    sites_display = sites_df[["name", "type", "distance", "altitude", "orientation", "difficulty"]].copy()
+                                    sites_display.columns = ["Nom", "Type", "Distance (km)", "Altitude (m)", "Orientation", "Difficulté"]
                                     
+                                    st.dataframe(sites_display)
+                                    
+                                    # Afficher une carte avec les sites
+                                    import folium
+                                    from streamlit_folium import folium_static
+                                    
+                                    m = folium.Map(location=[ffvl_lat, ffvl_lon], zoom_start=10)
+                                    
+                                    # Ajouter le point central
                                     folium.Marker(
-                                        [site["latitude"], site["longitude"]],
-                                        popup=f"<b>{site['name']}</b><br>Type: {site['type']}<br>Altitude: {site['altitude']}m<br>Orientation: {site['orientation']}<br>Difficulté: {site['difficulty']}",
-                                        icon=folium.Icon(color=icon_color, icon="flag")
+                                        [ffvl_lat, ffvl_lon],
+                                        popup="Position de référence",
+                                        icon=folium.Icon(color="red", icon="info-sign")
                                     ).add_to(m)
-                                
-                                # Afficher la carte
-                                folium_static(m)
-                                
-                                # Bouton pour sélectionner un site
-                                selected_site = st.selectbox("Sélectionner un site pour l'analyse", 
-                                                        options=range(len(sites)),
-                                                        format_func=lambda i: f"{sites[i]['name']} ({sites[i]['distance']} km)")
-                                
-                                if st.button("Utiliser ce site"):
-                                    site = sites[selected_site]
-                                    st.session_state.site_selection = {
-                                        "latitude": site["latitude"],
-                                        "longitude": site["longitude"],
-                                        "altitude": float(site["altitude"]) if site["altitude"] else st.session_state.site_selection["altitude"],
-                                        "model": st.session_state.site_selection["model"]
-                                    }
-                                    st.rerun()
+                                    
+                                    # Ajouter les sites
+                                    for site in sites:
+                                        icon_color = "green"
+                                        if "difficile" in site.get("difficulty", "").lower():
+                                            icon_color = "red"
+                                        elif "confirmé" in site.get("difficulty", "").lower():
+                                            icon_color = "orange"
+                                        
+                                        folium.Marker(
+                                            [site["latitude"], site["longitude"]],
+                                            popup=f"<b>{site['name']}</b><br>Type: {site['type']}<br>Altitude: {site['altitude']}m<br>Orientation: {site['orientation']}<br>Difficulté: {site['difficulty']}",
+                                            icon=folium.Icon(color=icon_color, icon="flag")
+                                        ).add_to(m)
+                                    
+                                    # Afficher la carte
+                                    folium_static(m)
+                                    
+                                    # Bouton pour sélectionner un site
+                                    selected_site = st.selectbox("Sélectionner un site pour l'analyse", 
+                                                            options=range(len(sites)),
+                                                            format_func=lambda i: f"{sites[i]['name']} ({sites[i]['distance']} km)")
+                                    
+                                    if st.button("Utiliser ce site"):
+                                        site = sites[selected_site]
+                                        st.session_state.site_selection = {
+                                            "latitude": site["latitude"],
+                                            "longitude": site["longitude"],
+                                            "altitude": float(site["altitude"]) if site["altitude"] else st.session_state.site_selection["altitude"],
+                                            "model": st.session_state.site_selection["model"]
+                                        }
+                                        st.rerun()
+                                else:
+                                    # Récupérer les données météo nécessaires pour les recommandations
+                                    # Soit depuis l'analyse si elle existe, soit des valeurs par défaut
+                                    if 'analysis' in locals() and analysis:
+                                        wind_dir = float(analysis.wind_directions[0]) if hasattr(analysis, 'wind_directions') and analysis.wind_directions else 0
+                                        wind_spd = float(analysis.wind_speeds[0]) if hasattr(analysis, 'wind_speeds') and analysis.wind_speeds else 10
+                                        thermal_ceil = float(analysis.thermal_ceiling)
+                                    else:
+                                        # Valeurs par défaut
+                                        wind_dir = 0
+                                        wind_spd = 10
+                                        thermal_ceil = 2000
+                                    
+                                    # Utiliser la nouvelle fonction d'affichage avec recommandations
+                                    display_recommended_ffvl_sites(sites, wind_dir, wind_spd, thermal_ceil)
                             else:
                                 st.warning("Aucun site trouvé dans ce rayon")
                                 st.info("Essayez d'augmenter le rayon de recherche ou de vérifier votre position")
@@ -1889,6 +2302,471 @@ def main():
                                 st.markdown("---")
                     
                     show_glossary()
+                
+                if fetch_evolution_enabled and evolution_data and 'tab5' in locals():
+                    with tab5:
+                        st.header("Analyse aérologique avancée")
+                        
+                        # Introduction à l'analyse avancée
+                        st.markdown("""
+                        Cette section fournit une analyse détaillée des conditions aérologiques basée sur 
+                        des modèles avancés. Ces informations sont particulièrement utiles pour les pilotes 
+                        expérimentés cherchant à optimiser leur stratégie de vol.
+                        """)
+                        
+                        # Créer plusieurs sections pour les différentes analyses
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.subheader("Analyse du terrain")
+                            
+                            with st.expander("ℹ️ Comprendre l'analyse du terrain", expanded=False):
+                                st.markdown("""
+                                **L'analyse du terrain** évalue comment la topographie locale influence les mouvements d'air:
+                                
+                                - **Facteur d'ensoleillement**: Mesure l'efficacité de l'exposition au soleil selon l'orientation et l'heure.
+                                _Valeur idéale_: > 0.7 (exposition optimale au rayonnement solaire)
+                                
+                                - **Effet venturi**: Quantifie l'accélération du vent due au relief.
+                                _Valeur idéale_: 1.0-1.5 (une valeur de 1.5 indique une amplification de 50%)
+                                
+                                - **Amplification thermique**: Combine tous les facteurs pour estimer l'intensification thermique.
+                                _Valeur idéale_: > 1.5 (les thermiques sont 50% plus puissants qu'en terrain plat)
+                                """)
+                            
+                            # Interface pour l'analyse du terrain
+                            slope_angle = st.slider("Angle de la pente (°)", 0, 60, 30, 
+                                                help="Angle moyen de la pente à proximité du décollage")
+                            
+                            aspect = st.select_slider("Orientation de la pente", 
+                                                options=["N", "NE", "E", "SE", "S", "SO", "O", "NO"],
+                                                value="S")
+                            
+                            # Convertir l'orientation en degrés
+                            aspect_degrees = {"N": 0, "NE": 45, "E": 90, "SE": 135, 
+                                            "S": 180, "SO": 225, "O": 270, "NO": 315}[aspect]
+                            
+                            # Calculer l'effet du relief
+                            terrain_effect = analyze_terrain_effect(
+                                latitude, longitude, analysis.ground_altitude, slope_angle, aspect_degrees
+                            )
+                            
+                            # Ajouter des indicateurs de qualité avec des emojis
+                            insolation_emoji = "🟢" if terrain_effect['insolation_factor'] > 0.7 else "🟡" if terrain_effect['insolation_factor'] > 0.4 else "🔴"
+                            venturi_emoji = "🟢" if 1.0 <= terrain_effect['venturi_factor'] <= 1.5 else "🟡" if terrain_effect['venturi_factor'] < 2.0 else "🔴"
+                            multiplier_emoji = "🟢" if terrain_effect['thermal_multiplier'] > 1.5 else "🟡" if terrain_effect['thermal_multiplier'] > 1.0 else "🔴"
+                            
+                            st.info(f"{insolation_emoji} **Facteur d'ensoleillement:** {terrain_effect['insolation_factor']:.2f}")
+                            st.info(f"{venturi_emoji} **Effet venturi:** {terrain_effect['venturi_factor']:.2f}x")
+                            st.info(f"{multiplier_emoji} **Amplification thermique:** {terrain_effect['thermal_multiplier']:.2f}x")
+                            
+                            # Explication détaillée du calcul
+                            with st.expander("Comment ce calcul est-il effectué?", expanded=False):
+                                st.markdown("""
+                                **Méthode de calcul:**
+                                
+                                1. **Facteur d'ensoleillement**: 
+                                - Calcul de l'angle d'élévation solaire basé sur la date
+                                - Détermination de l'azimut solaire (position horizontale)
+                                - Calcul de l'angle d'incidence des rayons sur la pente
+                                - Normalisation entre 0 et 1
+                                
+                                2. **Effet venturi**:
+                                - Formule: 1 + (angle_pente / 45) * 0.5
+                                - Une pente de 45° amplifie le vent de 50%
+                                
+                                3. **Effet de compression orographique**:
+                                - Prend en compte l'altitude du site
+                                - Formule: 1 + (altitude / 3000) * 0.3
+                                
+                                4. **Amplification thermique totale**:
+                                - Multiplication des trois facteurs ci-dessus
+                                """)
+                        
+                        with col2:
+                            st.subheader("Analyse des vents")
+                            
+                            with st.expander("ℹ️ Comprendre l'analyse des vents", expanded=False):
+                                st.markdown("""
+                                **L'analyse du profil de vent** examine comment le vent varie avec l'altitude:
+                                
+                                - **Niveau de turbulence**: Estimation basée sur les cisaillements (changements de vitesse/direction)
+                                _Interprétation_: "Faible" est idéal, "Modérée" demande de la vigilance, "Forte" ou plus est problématique
+                                
+                                - **Score de turbulence**: Valeur numérique (0-1) quantifiant les turbulences
+                                _Interprétation_: < 0.4 = conditions confortables, > 0.6 = conditions difficiles
+                                
+                                - **Phénomènes détectés**: Identifie des structures spécifiques comme les jets de basse couche,
+                                les convergences ou les zones de cisaillement important
+                                """)
+                            
+                            if hasattr(analyzer, 'wind_speeds') and analyzer.wind_speeds is not None:
+                                # Analyse du profil de vent
+                                wind_analysis = analyze_wind_profile(
+                                    analyzer.altitudes, 
+                                    analyzer.wind_speeds, 
+                                    analyzer.wind_directions, 
+                                    analysis.ground_altitude, 
+                                    analysis.thermal_ceiling
+                                )
+                                
+                                if wind_analysis["valid"]:
+                                    # Ajouter des emojis selon le niveau de turbulence
+                                    turbulence_emoji = "🟢" if wind_analysis["turbulence_level"] in ["Très faible", "Faible"] else "🟡" if wind_analysis["turbulence_level"] == "Modérée" else "🔴"
+                                    
+                                    st.metric("Niveau de turbulence", f"{turbulence_emoji} {wind_analysis['turbulence_level']}")
+                                    
+                                    # Ajout d'une jauge pour visualiser le score de turbulence
+                                    st.markdown(f"**Score de turbulence: {wind_analysis['turbulence_score']:.2f}**")
+                                    
+                                    # Créer une barre de progression pour visualiser le score
+                                    turbulence_color = "green" if wind_analysis['turbulence_score'] < 0.4 else "orange" if wind_analysis['turbulence_score'] < 0.7 else "red"
+                                    st.progress(float(wind_analysis['turbulence_score']))
+                                    
+                                    with st.expander("Comment ce score est-il calculé?", expanded=False):
+                                        st.markdown("""
+                                        **Calcul du score de turbulence:**
+                                        
+                                        Le score combine 3 facteurs principaux:
+                                        1. **Gradient de vitesse du vent** (40% du score): mesure les variations de vitesse avec l'altitude
+                                        2. **Gradient de direction du vent** (40% du score): mesure les rotations du vent avec l'altitude
+                                        3. **Vitesse moyenne du vent** (20% du score): les vents plus forts génèrent plus de turbulence
+                                        
+                                        Chaque facteur est normalisé entre 0 et 1, puis combiné avec sa pondération.
+                                        """)
+                                    
+                                    # Afficher les phénomènes de vent significatifs
+                                    if wind_analysis["wind_phenomena"]:
+                                        st.markdown("**Phénomènes de vent détectés:**")
+                                        for phenomenon in wind_analysis["wind_phenomena"]:
+                                            st.warning(f"⚠️ {phenomenon['description']} - {phenomenon['impact']}")
+                                            
+                                            # Ajouter des explications pour chaque type de phénomène
+                                            if phenomenon['type'] == "jet_basse_couche":
+                                                with st.expander("Qu'est-ce qu'un jet de basse couche?"):
+                                                    st.markdown("""
+                                                    Un **jet de basse couche** est une accélération localisée du vent à une altitude 
+                                                    relativement basse. Il peut créer des rotors (turbulences importantes) sous le jet 
+                                                    et des zones de cisaillement au-dessus et en-dessous.
+                                                    
+                                                    **Impact sur le vol:** 
+                                                    - Turbulence importante en dessous du jet
+                                                    - Dérive rapide si vous entrez dans la couche du jet
+                                                    - Difficulté à maintenir un cap constant
+                                                    """)
+                                            elif phenomenon['type'] == "convergence":
+                                                with st.expander("Qu'est-ce qu'une convergence?"):
+                                                    st.markdown("""
+                                                    Une **convergence** se produit lorsque deux masses d'air se rencontrent, 
+                                                    créant une zone d'ascendance. Elle est caractérisée par un changement 
+                                                    important de la direction du vent sur une faible épaisseur d'altitude.
+                                                    
+                                                    **Impact sur le vol:**
+                                                    - Peut créer une ligne d'ascendance exploitable
+                                                    - Permet parfois le vol dynamique même sans thermiques
+                                                    - Peut être turbulente mais prédictible
+                                                    """)
+                                            elif phenomenon['type'] == "couche_vent_fort":
+                                                with st.expander("Qu'est-ce qu'une couche de vent fort?"):
+                                                    st.markdown("""
+                                                    Une **couche de vent fort** est une strate d'atmosphère où la vitesse 
+                                                    du vent est significativement plus élevée qu'aux altitudes adjacentes.
+                                                    
+                                                    **Impact sur le vol:**
+                                                    - Dérive importante dans cette couche
+                                                    - Difficulté à progresser face au vent
+                                                    - Risque de ne pas pouvoir rentrer au terrain si vous dérivez trop
+                                                    - Peut limiter le plafond pratique même si le plafond thermique est plus haut
+                                                    """)
+                                    else:
+                                        st.success("✅ Aucun phénomène de vent particulier détecté")
+                                else:
+                                    st.warning(wind_analysis["message"])
+                            else:
+                                st.warning("Données de vent insuffisantes pour l'analyse détaillée")
+                        
+                        # Section pour l'analyse de la stabilité
+                        st.subheader("Stabilité atmosphérique avancée")
+                        
+                        with st.expander("ℹ️ Comprendre la stabilité atmosphérique", expanded=False):
+                            st.markdown("""
+                            **La stabilité atmosphérique** détermine la tendance de l'air à rester en place ou à se déplacer verticalement:
+                            
+                            - **Gradient thermique**: Taux de diminution de la température avec l'altitude
+                            _Interprétation_: Idéal entre 6-8°C/km, < 5°C/km = stable, > 9°C/km = instable
+                            
+                            - **Indice K**: Mesure de l'instabilité et du potentiel orageux
+                            _Interprétation_: < 15 = stable, 15-25 = quelques orages possibles, > 25 = risque d'orages important
+                            
+                            - **Stabilité**: Évaluation qualitative basée sur le Lifted Index
+                            _Interprétation_: "Légèrement instable" est idéal pour le vol thermique
+                            
+                            - **Qualité thermique**: Évaluation de la qualité des thermiques basée sur le gradient
+                            _Interprétation_: "Bonne" = thermiques bien formés et prévisibles
+                            """)
+                        
+                        # Estimer les niveaux de pression à partir des altitudes
+                        pressure_levels = 1013.25 * (1 - (analyzer.altitudes / 44330)) ** 5.255
+                        
+                        stability_analysis = calculate_advanced_stability(
+                            analyzer.temperatures, 
+                            analyzer.dew_points, 
+                            analyzer.altitudes, 
+                            pressure_levels
+                        )
+                        
+                        if stability_analysis["stability_valid"]:
+                            # Ajouter des explications et des indicateurs de qualité
+                            gradient_emoji = "🟢" if 6.0 <= stability_analysis['overall_lapse_rate'] <= 8.0 else "🟡" if 5.0 <= stability_analysis['overall_lapse_rate'] <= 9.0 else "🔴"
+                            stability_emoji = "🟢" if stability_analysis['stability'] in ["Légèrement instable", "Modérément instable"] else "🟡" if stability_analysis['stability'] == "Stable" else "🔴"
+                            thermal_emoji = "🟢" if stability_analysis['thermal_quality'] == "good" else "🟡" if stability_analysis['thermal_quality'] == "moderate" else "🔴"
+                            
+                            # Déterminer l'emoji pour l'indice K
+                            if stability_analysis['k_index'] is not None:
+                                if stability_analysis['k_index'] < 15:
+                                    k_emoji = "🟢"  # Peu de risque d'orage
+                                elif stability_analysis['k_index'] < 25:
+                                    k_emoji = "🟡"  # Quelques orages possibles
+                                else:
+                                    k_emoji = "🔴"  # Risque d'orages important
+                            else:
+                                k_emoji = "⚪"  # Indice K non disponible
+                            
+                            col1, col2, col3 = st.columns(3)
+                            
+                            with col1:
+                                st.metric("Gradient thermique", f"{gradient_emoji} {stability_analysis['overall_lapse_rate']:.1f}°C/km")
+                                with st.expander("Qu'est-ce que le gradient thermique?"):
+                                    st.markdown("""
+                                    Le **gradient thermique** mesure la diminution de la température avec l'altitude.
+                                    
+                                    **Interprétation:**
+                                    - **< 5°C/km**: Atmosphère très stable, thermiques faibles
+                                    - **5-6°C/km**: Assez stable, thermiques modérés
+                                    - **6-7°C/km**: Gradient standard, bonnes conditions
+                                    - **7-8°C/km**: Légèrement instable, thermiques puissants
+                                    - **> 9°C/km**: Très instable, thermiques puissants mais turbulents
+                                    
+                                    Le gradient standard dans l'atmosphère est d'environ 6.5°C/km.
+                                    """)
+                                
+                                st.metric("Indice K", f"{k_emoji} {stability_analysis['k_index']:.1f}" if stability_analysis['k_index'] is not None else "⚪ N/A")
+                                with st.expander("Qu'est-ce que l'indice K?"):
+                                    st.markdown("""
+                                    L'**indice K** est un indicateur météorologique du potentiel d'orages.
+                                    
+                                    Il est calculé à partir des différences de température et d'humidité 
+                                    à différents niveaux d'altitude.
+                                    
+                                    **Interprétation:**
+                                    - **< 15**: Air sec, peu de risque d'orage
+                                    - **15-20**: Quelques orages isolés possibles
+                                    - **20-25**: Orages épars possibles
+                                    - **25-30**: Nombreux orages possibles
+                                    - **> 30**: Orages généralisés
+                                    """)
+                            
+                            with col2:
+                                st.metric("Stabilité", f"{stability_emoji} {stability_analysis['stability']}")
+                                with st.expander("Comment interpréter la stabilité?"):
+                                    st.markdown("""
+                                    La **stabilité** indique la résistance de l'atmosphère aux mouvements verticaux.
+                                    
+                                    **Interprétation:**
+                                    - **Très stable**: Peu ou pas de thermiques, air calme
+                                    - **Stable**: Thermiques faibles et prévisibles
+                                    - **Légèrement instable**: Conditions idéales pour le vol thermique
+                                    - **Modérément instable**: Thermiques puissants et bien formés
+                                    - **Très instable**: Thermiques puissants mais turbulents, risque d'orages
+                                    
+                                    Pour le vol en parapente, une atmosphère légèrement à modérément instable 
+                                    offre généralement les meilleures conditions.
+                                    """)
+                                
+                                st.metric("Risque d'orage", f"{k_emoji} {stability_analysis['k_interpretation']}")
+                                with st.expander("Comment est évalué le risque d'orage?"):
+                                    st.markdown("""
+                                    Le **risque d'orage** est évalué principalement à partir de l'indice K et d'autres paramètres 
+                                    de stabilité.
+                                    
+                                    L'instabilité atmosphérique, combinée à une humidité suffisante à différents niveaux,
+                                    crée les conditions favorables au développement orageux.
+                                    
+                                    Les orages présentent des risques majeurs pour le vol en parapente:
+                                    - Rafales violentes et imprévisibles
+                                    - Mouvements verticaux extrêmes
+                                    - Grêle et précipitations intenses
+                                    - Foudre
+                                    
+                                    **En cas de risque d'orage, il est recommandé de ne pas voler ou d'atterrir rapidement.**
+                                    """)
+                            
+                            with col3:
+                                st.metric("Qualité thermique", f"{thermal_emoji} {stability_analysis['thermal_quality'].capitalize()}")
+                                with st.expander("Comment est évaluée la qualité thermique?"):
+                                    st.markdown("""
+                                    La **qualité thermique** évalue la structure et la prévisibilité des thermiques.
+                                    
+                                    **Facteurs pris en compte:**
+                                    - Gradient thermique
+                                    - Force des inversions
+                                    - Stabilité globale de l'atmosphère
+                                    
+                                    **Interprétation:**
+                                    - **Faible**: Thermiques discontinus, difficiles à exploiter
+                                    - **Modérée**: Thermiques utilisables mais irréguliers
+                                    - **Bonne**: Thermiques bien formés, réguliers et prévisibles
+                                    
+                                    Une bonne qualité thermique facilite la prise d'altitude et le maintien du vol.
+                                    """)
+                                
+                                st.metric("Force des inversions", f"{stability_analysis['inversion_strength'].capitalize()}")
+                                with st.expander("Qu'est-ce que la force des inversions?"):
+                                    st.markdown("""
+                                    La **force des inversions** évalue l'intensité des couches où la température 
+                                    augmente avec l'altitude (inversions).
+                                    
+                                    **Interprétation:**
+                                    - **Faible**: Inversions peu marquées, facilement traversables par les thermiques
+                                    - **Modérée**: Inversions notables qui peuvent limiter la hauteur des thermiques
+                                    - **Forte**: Inversions importantes qui bloquent efficacement les thermiques
+                                    
+                                    Les inversions agissent comme des "couvercles" qui limitent le développement vertical 
+                                    des thermiques et peuvent définir le plafond thermique.
+                                    """)
+                        else:
+                            st.warning(stability_analysis["message"])
+                        
+                        # Section pour la prédiction de la durée de vol
+                        st.subheader("Prédiction de vol")
+                        
+                        with st.expander("ℹ️ Comprendre la prédiction de vol", expanded=False):
+                            st.markdown("""
+                            **La prédiction de vol** estime les caractéristiques du vol possible dans les conditions actuelles:
+                            
+                            - **Durée de vol estimée**: Temps de vol typique dans ces conditions
+                            _Interprétation_: > 3h = excellentes conditions, 1-2h = conditions standards
+                            
+                            - **Taux de montée moyen**: Vitesse verticale moyenne des thermiques
+                            _Interprétation_: < 1 m/s = faible, 1-2 m/s = moyen, > 2 m/s = fort
+                            
+                            - **Potentiel Cross-Country**: Évaluation de la possibilité de faire des vols de distance
+                            _Interprétation_: "High" = conditions favorables pour des vols de distance
+                            
+                            - **Thermiques par heure**: Fréquence estimée des thermiques exploitables
+                            _Interprétation_: > 6 = bonne fréquence, < 3 = thermiques rares
+                            """)
+                        
+                        # Prédiction de la durée de vol
+                        flight_prediction = predict_flight_duration(
+                            analysis.thermal_ceiling,
+                            analysis.ground_altitude,
+                            analysis.thermal_strength,
+                            20 if analyzer.wind_speeds is None else np.nanmean(analyzer.wind_speeds),  # Vent moyen
+                            analysis.low_cloud_cover,
+                            analysis.thermal_gradient
+                        )
+                        
+                        # Ajouter des indicateurs de qualité
+                        duration_emoji = "🟢" if flight_prediction['flight_duration_hours'] > 3 else "🟡" if flight_prediction['flight_duration_hours'] > 1.5 else "🔴"
+                        climb_emoji = "🟢" if flight_prediction['avg_climb_rate'] > 2 else "🟡" if flight_prediction['avg_climb_rate'] > 1 else "🔴"
+                        xc_emoji = "🟢" if flight_prediction['xc_potential'] == "High" else "🟡" if flight_prediction['xc_potential'] == "Medium" else "🔴"
+                        thermals_emoji = "🟢" if flight_prediction['thermals_per_hour'] > 6 else "🟡" if flight_prediction['thermals_per_hour'] > 3 else "🔴"
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.metric("Durée de vol estimée", f"{duration_emoji} {flight_prediction['flight_duration_hours']:.1f} heures")
+                            with st.expander("Comment est calculée la durée de vol?"):
+                                st.markdown("""
+                                La **durée de vol estimée** combine plusieurs facteurs:
+                                
+                                1. **Hauteur exploitable** (plafond - altitude du site)
+                                2. **Force des thermiques** (selon l'analyse)
+                                3. **Conditions de vent** (vents modérés sont optimaux)
+                                4. **Couverture nuageuse** (affecte l'ensoleillement)
+                                5. **Gradient thermique** (indicateur de l'activité thermique)
+                                
+                                Une durée supérieure à 3 heures indique des conditions exceptionnelles,
+                                tandis qu'une durée inférieure à 1 heure suggère des conditions marginales.
+                                """)
+                            
+                            st.metric("Taux de montée moyen", f"{climb_emoji} {flight_prediction['avg_climb_rate']:.1f} m/s")
+                            with st.expander("Comment est estimé le taux de montée?"):
+                                st.markdown("""
+                                Le **taux de montée moyen** est estimé principalement à partir:
+                                
+                                - De la force des thermiques indiquée dans l'analyse
+                                - Du gradient thermique
+                                - De la stabilité atmosphérique
+                                
+                                **Valeurs typiques:**
+                                - < 1 m/s: Thermiques faibles, gain d'altitude lent
+                                - 1-2 m/s: Thermiques modérés, bon pour le vol local
+                                - 2-3 m/s: Thermiques forts, idéal pour le cross
+                                - > 3 m/s: Thermiques très puissants, conditions potentiellement turbulentes
+                                
+                                Ces valeurs représentent des moyennes - les pics peuvent être plus élevés.
+                                """)
+                        
+                        with col2:
+                            st.metric("Potentiel Cross-Country", f"{xc_emoji} {flight_prediction['xc_potential']}")
+                            with st.expander("Comment est évalué le potentiel cross?"):
+                                st.markdown("""
+                                Le **potentiel cross-country** évalue la possibilité de réaliser des vols de distance:
+                                
+                                **Facteurs pris en compte:**
+                                - Durée de vol possible
+                                - Plafond thermique
+                                - Force des thermiques
+                                - Régularité des ascendances
+                                
+                                **Interprétation:**
+                                - **Low**: Vol local recommandé, conditions limitées
+                                - **Medium**: Petit cross possible, vigilance requise
+                                - **High**: Bonnes conditions pour vol de distance
+                                
+                                La planification d'un vol cross doit toujours prendre en compte d'autres facteurs
+                                comme les zones aériennes, le terrain, et vos options d'atterrissage.
+                                """)
+                            
+                            st.metric("Thermiques par heure", f"{thermals_emoji} {flight_prediction['thermals_per_hour']:.1f}")
+                            with st.expander("Comment est calculée la fréquence des thermiques?"):
+                                st.markdown("""
+                                La **fréquence des thermiques** estime combien de thermiques exploitables 
+                                un pilote peut rencontrer chaque heure.
+                                
+                                **Facteurs pris en compte:**
+                                - Force des thermiques (thermiques plus forts = plus détectables)
+                                - Gradient thermique (gradient plus fort = déclenchements plus fréquents)
+                                - Stabilité de l'atmosphère
+                                
+                                **Interprétation:**
+                                - < 3 thermiques/heure: Ascendances rares, vol difficile
+                                - 3-6 thermiques/heure: Fréquence moyenne, vol standard
+                                - > 6 thermiques/heure: Haute fréquence, vol facilité
+                                
+                                Une fréquence élevée permet de maintenir le vol plus facilement, même si
+                                les thermiques individuels sont moins puissants.
+                                """)
+                        
+                        # Heures optimales
+                        st.info(f"**Heures optimales de vol:** Matin: {int(flight_prediction['optimal_start_morning'])}h{int((flight_prediction['optimal_start_morning'] % 1) * 60):02d} | Après-midi: {int(flight_prediction['optimal_start_afternoon'])}h{int((flight_prediction['optimal_start_afternoon'] % 1) * 60):02d}")
+                        with st.expander("Comment sont calculées les heures optimales?"):
+                            st.markdown("""
+                            Les **heures optimales de vol** sont déterminées en fonction:
+                            
+                            - De la force des thermiques (pour les thermiques plus forts, on privilégie le début et la fin de journée)
+                            - De la couverture nuageuse (influence l'ensoleillement et donc le cycle thermique)
+                            - De la saison et de l'orientation du site
+                            
+                            **Stratégies selon les conditions:**
+                            - **Thermiques forts**: Voler tôt le matin ou en fin d'après-midi pour éviter les survitesses
+                            - **Thermiques modérés**: Voler en milieu de journée quand l'activité est maximale
+                            - **Thermiques faibles**: Voler au moment le plus chaud, généralement entre 12h et 14h
+                            
+                            Ces heures sont des estimations et peuvent varier selon les conditions locales.
+                            """)
 
 # Point d'entrée principal
 if __name__ == "__main__":
