@@ -2652,6 +2652,8 @@ def main():
                             _Interprétation_: > 6 = bonne fréquence, < 3 = thermiques rares
                             """)
                         
+                        import numpy as np
+                        
                         # Prédiction de la durée de vol
                         flight_prediction = predict_flight_duration(
                             analysis.thermal_ceiling,
@@ -2761,6 +2763,364 @@ def main():
                             - **Thermiques faibles**: Voler au moment le plus chaud, généralement entre 12h et 14h
                             
                             Ces heures sont des estimations et peuvent varier selon les conditions locales.
+                            """)
+                        
+                        # Nouvelle section pour l'analyse des convergences de vent
+                        st.subheader("Analyse des convergences")
+
+                        with st.expander("ℹ️ Comprendre les convergences de vent", expanded=False):
+                            st.markdown("""
+                            **Les convergences de vent** sont des zones où des vents de directions différentes se rencontrent, 
+                            créant souvent des ascendances exploitables:
+                            
+                            - **Zones de convergence**: Situations où les vents de directions différentes s'affrontent
+                            - **Force de convergence**: Intensité de l'ascendance générée par la convergence
+                            - **Potentiel d'ascendance dynamique**: Possibilité d'exploiter les convergences pour le vol
+                            
+                            Les convergences peuvent créer des lignes d'ascendance puissantes et persistantes,
+                            parfois exploitables même en l'absence de thermiques.
+                            """)
+
+                        # Vérifier si les données de vent sont disponibles
+                        if hasattr(analyzer, 'wind_speeds') and analyzer.wind_speeds is not None:
+                            # Analyse des convergences
+                            convergence_analysis = detect_convergence_zones(
+                                analyzer.wind_directions, 
+                                analyzer.wind_speeds, 
+                                analyzer.altitudes
+                            )
+                            
+                            if convergence_analysis["has_convergence"]:
+                                st.success("✅ Zones de convergence détectées!")
+                                
+                                # Afficher les détails de chaque convergence
+                                for i, conv in enumerate(convergence_analysis["convergences"]):
+                                    st.info(f"**Convergence {i+1}:** Altitude {conv['altitude']:.0f}m - Type: {conv['type']}")
+                                    
+                                    # Afficher plus de détails dans un expander
+                                    with st.expander(f"Détails de la convergence {i+1}"):
+                                        st.markdown(f"""
+                                        - **Altitude:** {conv['altitude']:.0f}m
+                                        - **Force:** {conv['strength']:.2f} (0-1)
+                                        - **Type:** {conv['type']}
+                                        - **Direction en dessous:** {conv['lower_direction']:.0f}°
+                                        - **Direction au-dessus:** {conv['upper_direction']:.0f}°
+                                        """)
+                                        
+                                        # Créer un schéma simple pour illustrer la convergence
+                                        import matplotlib.pyplot as plt
+                                        import numpy as np
+                                        
+                                        fig, ax = plt.subplots(figsize=(4, 3))
+                                        
+                                        # Dessiner les flèches représentant les vents
+                                        arrow_length = 0.4
+                                        
+                                        # Flèche inférieure (vent en dessous)
+                                        lower_dx = arrow_length * np.sin(np.radians(conv['lower_direction']))
+                                        lower_dy = arrow_length * np.cos(np.radians(conv['lower_direction']))
+                                        ax.arrow(0.5 - lower_dx, 0.25, lower_dx, lower_dy, 
+                                                head_width=0.05, head_length=0.1, fc='blue', ec='blue', linewidth=2)
+                                        
+                                        # Flèche supérieure (vent au-dessus)
+                                        upper_dx = arrow_length * np.sin(np.radians(conv['upper_direction']))
+                                        upper_dy = arrow_length * np.cos(np.radians(conv['upper_direction']))
+                                        ax.arrow(0.5 - upper_dx, 0.75, upper_dx, upper_dy, 
+                                                head_width=0.05, head_length=0.1, fc='red', ec='red', linewidth=2)
+                                        
+                                        # Flèche verticale pour l'ascendance
+                                        ax.arrow(0.5, 0.3, 0, 0.4, head_width=0.05, head_length=0.1, 
+                                                fc='green', ec='green', linestyle='--', linewidth=1)
+                                        
+                                        # Texte explicatif
+                                        ax.text(0.2, 0.2, f"Vent {conv['lower_direction']:.0f}°", color='blue')
+                                        ax.text(0.2, 0.8, f"Vent {conv['upper_direction']:.0f}°", color='red')
+                                        ax.text(0.6, 0.5, "Ascendance", color='green')
+                                        
+                                        # Configuration des axes
+                                        ax.set_xlim(0, 1)
+                                        ax.set_ylim(0, 1)
+                                        ax.set_title(f"Convergence à {conv['altitude']:.0f}m")
+                                        ax.axis('off')
+                                        
+                                        st.pyplot(fig)
+                                
+                                # Évaluation du potentiel d'ascendance dynamique
+                                if convergence_analysis["potential_dynamic_lift"]:
+                                    st.success("✅ **Bon potentiel d'ascendance dynamique** - Ces convergences peuvent générer des ascendances exploitables")
+                                    st.markdown("""
+                                    **Conseils pour exploiter les convergences:**
+                                    1. Volez à l'altitude où la convergence est détectée
+                                    2. Cherchez des indices visuels comme des alignements de nuages ou de poussière/débris
+                                    3. Les convergences créent souvent des "lignes" d'ascendance - volez le long de ces lignes
+                                    4. L'ascendance peut être moins turbulente qu'un thermique mais plus faible - soyez patient
+                                    """)
+                                else:
+                                    st.info("ℹ️ **Potentiel d'ascendance dynamique limité** - Ces convergences sont probablement trop faibles pour générer des ascendances significatives")
+                            else:
+                                st.info("ℹ️ Aucune zone de convergence significative détectée dans le profil de vent")
+                        else:
+                            st.warning("Données de vent insuffisantes pour l'analyse des convergences")
+
+                        # Nouvelle section pour l'analyse des brises de vallée
+                        st.subheader("Analyse des brises de vallée")
+
+                        with st.expander("ℹ️ Comprendre les brises de vallée", expanded=False):
+                            st.markdown("""
+                            **Les brises de vallée** sont des vents thermiques locaux qui se développent dans les régions montagneuses:
+                            
+                            - **Brise montante (anabatique)**: Pendant la journée, l'air réchauffé remonte les pentes et vallées
+                            - **Brise descendante (catabatique)**: La nuit, l'air refroidi descend les pentes et vallées
+                            - **Cycle diurne**: Ces brises suivent un cycle quotidien prévisible
+                            
+                            Les brises de vallée sont particulièrement importantes pour le vol en région montagneuse,
+                            car elles peuvent faciliter les décollages, créer des ascendances dynamiques le long des pentes,
+                            et influencer la direction et la force du vent sur site.
+                            """)
+
+                        # Interface pour les paramètres de vallée
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            # Récupérer l'heure actuelle comme valeur par défaut
+                            current_hour = datetime.now().hour
+                            hour = st.slider("Heure de la journée", 0, 23, current_hour, 
+                                            help="L'heure influence fortement le régime des brises")
+                            
+                            valley_depth = st.slider("Profondeur de la vallée (m)", 
+                                                    100, 2000, 800, 100,
+                                                    help="Distance verticale entre le fond de vallée et les crêtes")
+
+                        with col2:
+                            valley_width = st.slider("Largeur de la vallée (m)", 
+                                                    200, 5000, 1000, 100,
+                                                    help="Distance horizontale entre les versants opposés")
+                            
+                            valley_orientation = st.slider("Orientation de la vallée (°)", 
+                                                        0, 359, 180, 
+                                                        help="Direction dans laquelle la vallée monte (0=N, 90=E, etc.)")
+
+                        # Analyse des brises de vallée
+                        valley_breeze_analysis = analyze_valley_breeze(
+                            hour, 
+                            analysis.ground_altitude,
+                            valley_depth, 
+                            valley_width, 
+                            valley_orientation
+                        )
+
+                        # Afficher les résultats
+                        st.subheader(f"Régime de brise: {valley_breeze_analysis['regime'].capitalize()}")
+
+                        # Ajouter une visualisation simple
+                        import matplotlib.pyplot as plt
+                        import numpy as np
+
+                        fig, ax = plt.subplots(figsize=(6, 4))
+
+                        # Dessiner le profil de la vallée
+                        x = np.linspace(0, 10, 100)
+                        left_slope = 5 + valley_depth/500 * np.exp(-((x-2)**2)/1.5)
+                        right_slope = 5 + valley_depth/500 * np.exp(-((x-8)**2)/1.5)
+                        valley_floor = np.minimum(left_slope, right_slope)
+
+                        ax.fill_between(x, 0, left_slope, color='brown', alpha=0.3)
+                        ax.fill_between(x, 0, right_slope, color='brown', alpha=0.3)
+
+                        # Dessiner les flèches de brise
+                        if valley_breeze_analysis['regime'] == 'montante':
+                            # Flèches montantes sur les pentes
+                            for i in range(2, 9, 2):
+                                slope_height = left_slope[i*10] if i < 5 else right_slope[i*10]
+                                arrow_size = min(1.0, valley_breeze_analysis['intensity_kmh'] / 15)
+                                ax.arrow(i, slope_height/3, 0, arrow_size, 
+                                        head_width=0.2, head_length=0.3, fc='red', ec='red')
+                            
+                            # Flèche centrale
+                            ax.arrow(5, 1, 0, 1.5, head_width=0.3, head_length=0.5, fc='red', ec='red')
+                        else:
+                            # Flèches descendantes sur les pentes
+                            for i in range(2, 9, 2):
+                                slope_height = left_slope[i*10] if i < 5 else right_slope[i*10]
+                                arrow_size = min(1.0, valley_breeze_analysis['intensity_kmh'] / 15)
+                                ax.arrow(i, slope_height*2/3, 0, -arrow_size, 
+                                        head_width=0.2, head_length=0.3, fc='blue', ec='blue')
+                            
+                            # Flèche centrale
+                            ax.arrow(5, 2.5, 0, -1.5, head_width=0.3, head_length=0.5, fc='blue', ec='blue')
+
+                        # Configuration des axes
+                        ax.set_xlim(0, 10)
+                        ax.set_ylim(0, max(np.max(left_slope), np.max(right_slope))*1.2)
+                        ax.set_title(f"Brise {valley_breeze_analysis['regime']} - {valley_breeze_analysis['phase']}")
+                        ax.set_xticks([])
+                        ax.set_yticks([])
+                        ax.spines['top'].set_visible(False)
+                        ax.spines['right'].set_visible(False)
+                        ax.spines['bottom'].set_visible(False)
+                        ax.spines['left'].set_visible(False)
+
+                        st.pyplot(fig)
+
+                        # Afficher les détails de la brise
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            st.metric("Intensité de la brise", f"{valley_breeze_analysis['intensity_kmh']:.1f} km/h")
+                            st.metric("Direction", f"{valley_breeze_analysis['direction']}°")
+
+                        with col2:
+                            st.metric("Phase actuelle", valley_breeze_analysis['phase'].capitalize())
+                            st.metric("Pic d'intensité à", f"{valley_breeze_analysis['peak_hour']}h00")
+
+                        # Conseils pour le vol basés sur le régime de brise
+                        if valley_breeze_analysis['regime'] == 'montante':
+                            st.success("""
+                            **Conseils pour la brise montante:**
+                            - Privilégiez les faces orientées au soleil pour trouver les meilleures ascendances
+                            - Le milieu de journée offre généralement les brises montantes les plus fortes
+                            - Combinez la brise de vallée avec les thermiques pour optimiser votre gain d'altitude
+                            - Attention aux changements de vent lors du passage d'une vallée à l'autre
+                            """)
+                        else:
+                            st.info("""
+                            **Conseils pour la brise descendante:**
+                            - Évitez de voler près des pentes qui peuvent générer des rabattants
+                            - Les conditions sont généralement moins favorables au vol thermique
+                            - Le vol du matin ou du soir peut nécessiter plus de prudence
+                            - Si vous volez, restez à distance du relief et prévoyez des marges de sécurité
+                            """)
+
+                        # Nouvelle section pour l'interpolation des données manquantes
+                        st.subheader("Analyse de la qualité des données")
+
+                        with st.expander("ℹ️ Comprendre l'interpolation des données", expanded=False):
+                            st.markdown("""
+                            **L'interpolation des données** permet de compléter les informations manquantes dans le profil vertical:
+                            
+                            - **Données manquantes**: Niveaux où certaines mesures ne sont pas disponibles
+                            - **Méthodes d'interpolation**: Techniques mathématiques pour estimer les valeurs absentes
+                            - **Qualité de l'analyse**: L'interpolation améliore la fiabilité de l'analyse globale
+                            
+                            Une bonne interpolation est particulièrement importante pour les analyses qui dépendent
+                            de profils verticaux complets, comme le calcul du plafond thermique ou de la stabilité.
+                            """)
+
+                        # Vérifier si des données sont manquantes
+                        temperature_nan = np.isnan(analyzer.temperatures).sum() if hasattr(analyzer, 'temperatures') else 0
+                        dew_point_nan = np.isnan(analyzer.dew_points).sum() if hasattr(analyzer, 'dew_points') else 0
+                        wind_speed_nan = np.isnan(analyzer.wind_speeds).sum() if hasattr(analyzer, 'wind_speeds') else 0
+                        wind_dir_nan = np.isnan(analyzer.wind_directions).sum() if hasattr(analyzer, 'wind_directions') else 0
+
+                        total_points = len(analyzer.altitudes)
+                        missing_data = temperature_nan > 0 or dew_point_nan > 0 or wind_speed_nan > 0 or wind_dir_nan > 0
+
+                        if missing_data:
+                            st.warning(f"⚠️ Données incomplètes détectées dans le profil vertical")
+                            
+                            # Afficher un résumé des données manquantes
+                            missing_data_df = pd.DataFrame({
+                                "Type de données": ["Température", "Point de rosée", "Vitesse du vent", "Direction du vent"],
+                                "Points manquants": [temperature_nan, dew_point_nan, wind_speed_nan, wind_dir_nan],
+                                "Pourcentage": [
+                                    f"{temperature_nan/total_points*100:.1f}%", 
+                                    f"{dew_point_nan/total_points*100:.1f}%", 
+                                    f"{wind_speed_nan/total_points*100:.1f}%", 
+                                    f"{wind_dir_nan/total_points*100:.1f}%"
+                                ]
+                            })
+                            
+                            st.dataframe(missing_data_df)
+                            
+                            # Bouton pour interpoler les données manquantes
+                            if st.button("Interpoler les données manquantes"):
+                                with st.spinner("Interpolation des données..."):
+                                    # Créer des copies des données pour l'interpolation
+                                    interpolated_temps = analyzer.temperatures.copy()
+                                    interpolated_dew_points = analyzer.dew_points.copy()
+                                    interpolated_wind_speeds = analyzer.wind_speeds.copy()
+                                    interpolated_wind_directions = analyzer.wind_directions.copy()
+                                    
+                                    # Appliquer l'interpolation
+                                    interpolated_temps, interpolated_dew_points, interpolated_wind_speeds, interpolated_wind_directions = interpolate_missing_data(
+                                        analyzer.altitudes,
+                                        interpolated_temps,
+                                        interpolated_dew_points,
+                                        interpolated_wind_speeds,
+                                        interpolated_wind_directions
+                                    )
+                                    
+                                    # Compter les NaN restants après interpolation
+                                    temp_nan_after = np.isnan(interpolated_temps).sum()
+                                    dew_nan_after = np.isnan(interpolated_dew_points).sum()
+                                    wspd_nan_after = np.isnan(interpolated_wind_speeds).sum()
+                                    wdir_nan_after = np.isnan(interpolated_wind_directions).sum()
+                                    
+                                    # Afficher les résultats
+                                    st.success("✅ Interpolation terminée")
+                                    
+                                    results_df = pd.DataFrame({
+                                        "Type de données": ["Température", "Point de rosée", "Vitesse du vent", "Direction du vent"],
+                                        "Points manquants avant": [temperature_nan, dew_point_nan, wind_speed_nan, wind_dir_nan],
+                                        "Points manquants après": [temp_nan_after, dew_nan_after, wspd_nan_after, wdir_nan_after],
+                                        "Points récupérés": [
+                                            temperature_nan - temp_nan_after,
+                                            dew_point_nan - dew_nan_after,
+                                            wind_speed_nan - wspd_nan_after,
+                                            wind_dir_nan - wdir_nan_after
+                                        ]
+                                    })
+                                    
+                                    st.dataframe(results_df)
+                                    
+                                    # Visualiser l'effet de l'interpolation
+                                    if temperature_nan > 0 or dew_point_nan > 0:
+                                        fig, ax = plt.subplots(figsize=(8, 6))
+                                        
+                                        # Tracer les données originales avec marquage des points manquants
+                                        ax.plot(analyzer.temperatures, analyzer.altitudes, 'r-', label='Température originale')
+                                        ax.plot(analyzer.dew_points, analyzer.altitudes, 'b-', label='Point de rosée original')
+                                        
+                                        # Marquer les points où des données étaient manquantes
+                                        temp_nan_mask = np.isnan(analyzer.temperatures)
+                                        dew_nan_mask = np.isnan(analyzer.dew_points)
+                                        
+                                        # Tracer les données interpolées
+                                        ax.plot(interpolated_temps, analyzer.altitudes, 'r--', label='Température interpolée')
+                                        ax.plot(interpolated_dew_points, analyzer.altitudes, 'b--', label='Point de rosée interpolé')
+                                        
+                                        # Marquer les points interpolés
+                                        ax.scatter(interpolated_temps[temp_nan_mask], analyzer.altitudes[temp_nan_mask], 
+                                                c='red', marker='o', s=30, label='Température interpolée')
+                                        ax.scatter(interpolated_dew_points[dew_nan_mask], analyzer.altitudes[dew_nan_mask], 
+                                                c='blue', marker='o', s=30, label='Point de rosée interpolé')
+                                        
+                                        ax.set_xlabel('Température (°C)')
+                                        ax.set_ylabel('Altitude (m)')
+                                        ax.set_title('Effet de l\'interpolation sur les données de température')
+                                        ax.legend()
+                                        ax.grid(True)
+                                        
+                                        st.pyplot(fig)
+                                        
+                                    # Option pour utiliser les données interpolées
+                                    st.info("""
+                                    Note: Les données interpolées sont affichées à titre informatif uniquement.
+                                    Pour utiliser ces données dans l'analyse complète, vous devriez relancer l'analyse
+                                    avec l'option d'interpolation activée dans les paramètres avancés.
+                                    """)
+                        else:
+                            st.success("✅ Profil vertical complet - Aucune donnée manquante détectée")
+                            
+                            # Afficher un résumé de la qualité des données
+                            st.info(f"""
+                            **Résumé de la qualité des données:**
+                            - Nombre total de niveaux: {total_points}
+                            - Profil de température: Complet
+                            - Profil du point de rosée: Complet
+                            - Profil de vent: Complet
+                            
+                            L'analyse devrait être fiable sans nécessiter d'interpolation supplémentaire.
                             """)
 
 # Point d'entrée principal
