@@ -1124,6 +1124,7 @@ def main():
     analysis = None
     detailed_analysis = None
     evolution_data = None
+    timestep = 0
 
     # Initialiser l'état de la géolocalisation
     if 'geolocation_attempted' not in st.session_state:
@@ -1343,73 +1344,84 @@ def main():
     st.sidebar.header("Configuration")
     
     # Section pour la source des données
-    st.sidebar.subheader("Source des données")
-    data_source = st.sidebar.radio(
-        "Sélectionnez une source de données",
-        options=["Open-Meteo (sans clé API)"],
-        index=0,  # Option par défaut : Open-Meteo
-        help="Choisissez la source pour récupérer les données météorologiques"
-    )
-
-    use_openmeteo = (data_source == "Open-Meteo (sans clé API)")
-
-    # Modèle météo en fonction de la source de données
-    if use_openmeteo:
-        model_options = [
-            "meteofrance_arome_france_hd", 
-            "meteofrance_arpege_europe",
-            "meteofrance_arpege_world",
-            "ecmwf_ifs025",  # Corriger le nom du modèle (au lieu de ecmwf_ifs04)
-            "gfs_seamless"
-        ]
-        model_descriptions = {
-            "meteofrance_arome_france_hd": "AROME HD (France ~2km)",
-            "meteofrance_arpege_europe": "ARPEGE (Europe ~11km)",
-            "meteofrance_arpege_world": "ARPEGE (Mondial ~40km)",
-            "ecmwf_ifs025": "ECMWF IFS (Mondial ~25km)",  # Mise à jour du nom et de la résolution
-            "gfs_seamless": "GFS (Mondial ~25km)"
-        }
-        model_labels = [model_descriptions[m] for m in model_options]
-        model_index = st.sidebar.selectbox(
-            "Modèle météo",
-            options=range(len(model_options)),
-            format_func=lambda i: model_labels[i],
-            index=0
+    with st.sidebar.expander("Source des données"):
+        data_source = st.radio(
+            "Sélectionnez une source de données",
+            options=["Open-Meteo (sans clé API)"],
+            index=0,  # Option par défaut : Open-Meteo
+            help="Choisissez la source pour récupérer les données météorologiques"
         )
-        model = model_options[model_index]
+
+        use_openmeteo = (data_source == "Open-Meteo (sans clé API)")
+
+        # Modèle météo en fonction de la source de données
+        if use_openmeteo:
+            model_options = [
+                "meteofrance_arome_france_hd", 
+                "meteofrance_arpege_europe",
+                "meteofrance_arpege_world",
+                "ecmwf_ifs025",  # Corriger le nom du modèle (au lieu de ecmwf_ifs04)
+                "gfs_seamless"
+            ]
+            model_descriptions = {
+                "meteofrance_arome_france_hd": "AROME HD (France ~2km)",
+                "meteofrance_arpege_europe": "ARPEGE (Europe ~11km)",
+                "meteofrance_arpege_world": "ARPEGE (Mondial ~40km)",
+                "ecmwf_ifs025": "ECMWF IFS (Mondial ~25km)",  # Mise à jour du nom et de la résolution
+                "gfs_seamless": "GFS (Mondial ~25km)"
+            }
+            model_labels = [model_descriptions[m] for m in model_options]
+            model_index = st.selectbox(
+                "Modèle météo",
+                options=range(len(model_options)),
+                format_func=lambda i: model_labels[i],
+                index=0
+            )
+            model = model_options[model_index]
+            
+            # Informations supplémentaires selon le modèle sélectionné
+            if model == "meteofrance_arome_france_hd":
+                st.info("AROME HD: Haute résolution (~2km) sur la France, précis pour les reliefs")
+            elif model == "meteofrance_arpege_europe":
+                st.info("ARPEGE Europe: Résolution moyenne (~11km), bonne couverture européenne")
+            elif model == "meteofrance_arpege_world":
+                st.info("ARPEGE Mondial: Résolution plus grossière (~40km), disponible partout dans le monde")
+            elif model == "ecmwf_ifs025":
+                st.info("""
+                    **Note sur ECMWF IFS**: Ce modèle fournit des données à résolution 3-horaire (toutes les 3 heures) 
+                    et non horaire comme les autres modèles. L'évolution des conditions peut donc paraître moins 
+                    détaillée. Pour une analyse à court terme plus précise, privilégiez AROME HD.
+                    """)
+            elif model == "gfs_seamless":
+                st.info("GFS: Modèle américain, disponible mondialement, résolution ~25km")
+            
+            # Pas besoin de clé API pour Open-Meteo
+            api_key = None
         
-        # Informations supplémentaires selon le modèle sélectionné
-        if model == "meteofrance_arome_france_hd":
-            st.sidebar.info("AROME HD: Haute résolution (~2km) sur la France, précis pour les reliefs")
-        elif model == "meteofrance_arpege_europe":
-            st.sidebar.info("ARPEGE Europe: Résolution moyenne (~11km), bonne couverture européenne")
-        elif model == "meteofrance_arpege_world":
-            st.sidebar.info("ARPEGE Mondial: Résolution plus grossière (~40km), disponible partout dans le monde")
-        elif model == "ecmwf_ifs025":
-            st.info("""
-                **Note sur ECMWF IFS**: Ce modèle fournit des données à résolution 3-horaire (toutes les 3 heures) 
-                et non horaire comme les autres modèles. L'évolution des conditions peut donc paraître moins 
-                détaillée. Pour une analyse à court terme plus précise, privilégiez AROME HD.
-                """)
-        elif model == "gfs_seamless":
-            st.sidebar.info("GFS: Modèle américain, disponible mondialement, résolution ~25km")
+        # Ajouter la configuration FFVL
+        st.subheader("Paramètres FFVL")
+        ffvl_api_key = st.text_input("Clé API FFVL", 
+                                    value=st.session_state.get("ffvl_api_key", ""),
+                                    type="password",
+                                    help="Clé API FFVL pour la recherche de sites. Contactez informatique@ffvl.fr pour l'obtenir.")
+            
+        # Sauvegarder la clé API dans session_state
+        if ffvl_api_key:
+                st.session_state.ffvl_api_key = ffvl_api_key
+
+        # Option pour clé OpenAI (analyse IA)
+        use_ai = st.checkbox("Utiliser l'analyse IA externe (OpenAI)", value=False,
+                                help="Utilise OpenAI pour générer une analyse détaillée en complément de l'analyse intégrée")
         
-        # Pas besoin de clé API pour Open-Meteo
-        api_key = None
-    
-    # Option pour clé OpenAI (analyse IA)
-    use_ai = st.sidebar.checkbox("Utiliser l'analyse IA externe (OpenAI)", value=False,
-                               help="Utilise OpenAI pour générer une analyse détaillée en complément de l'analyse intégrée")
-    
-    if use_ai:
-        openai_key = st.sidebar.text_input("Clé API OpenAI", type="password")
-    else:
-        openai_key = None
-        # Message indiquant que l'analyse intégrée sera utilisée
-        st.sidebar.info("L'analyse détaillée intégrée sera utilisée")
+        if use_ai:
+            openai_key = st.text_input("Clé API OpenAI", type="password")
+        else:
+            openai_key = None
+            # Message indiquant que l'analyse intégrée sera utilisée
+            st.info("L'analyse détaillée intégrée sera utilisée")
     
     # Paramètres avancés
-    with st.sidebar.expander("Paramètres avancés"):
+    with st.sidebar.expander("Paramètres"):
         delta_t = st.slider("Delta T de déclenchement (°C)", 
                         min_value=1.0, max_value=6.0, value=3.0, step=0.5,
                         help="Différence de température requise pour déclencher un thermique")
@@ -1419,33 +1431,64 @@ def main():
                                 help="Récupère les données depuis l'heure actuelle jusqu'à l'heure de prévision sélectionnée")
         
         # Ajouter cette nouvelle option spécifique pour le mode multi-horaire avec slider
-        use_multi_hour = st.checkbox("Mode multi-horaire avec slider", value=False,
-                                help="Affiche un slider pour naviguer entre différentes heures de prévision")
+        use_multi_hour = st.checkbox("Mode multi-horaires", value=False,
+                                help="Affiche H+ pour naviguer entre les émagrammes")
         
         if fetch_evolution_enabled or use_multi_hour:
-            col1, col2 = st.columns(2)
-            with col1:
-                evolution_hours = st.slider("Période d'évolution (heures)", 
+            evolution_hours = st.slider("Période d'évolution (heures)", 
                                         min_value=6, max_value=48, value=24, step=6,
                                         help="Durée totale de la période d'évolution à analyser")
-            with col2:
-                evolution_step = st.slider("Pas de temps (heures)", 
+            evolution_step = st.slider("Pas de temps (heures)", 
                                         min_value=1, max_value=6, value=3, step=1,
                                         help="Intervalle entre chaque point d'analyse")
+            # Section pour le pas de temps de prévision (nouveau)
+            # Déterminer la plage de temps disponible selon le modèle
+            if model == "meteofrance_arome_france_hd":
+                max_timestep = 36
+                timestep = st.slider("Heure de prévision", 0, max_timestep, 0, 
+                                            help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
+                st.info(f"AROME: prévisions disponibles jusqu'à H+{max_timestep}")
+            elif model == "meteofrance_arpege_europe" or model == "meteofrance_arpege_world":
+                max_timestep = 96
+                timestep = st.slider("Heure de prévision", 0, max_timestep, 0, 
+                                            help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
+                st.info(f"ARPÈGE: prévisions disponibles jusqu'à H+{max_timestep}")
+            elif model == "ecmwf_ifs025":
+                max_timestep = 120  # 15 jours x 8 pas par jour = 120 pas (à 3h d'intervalle)
+                
+                # Avertir que les données sont à résolution 3-horaire
+                st.warning("⚠️ Le modèle ECMWF IFS fournit des données à résolution 3-horaire, " +
+                                "ce qui peut limiter la précision de l'analyse d'évolution.")
+                
+                timestep = st.slider("Heure de prévision", 0, max_timestep, 0, step=3,  # Pas de 3h
+                                        help=f"0 = analyse actuelle, les prévisions sont disponibles par pas de 3h")
+                
+                st.info(f"ECMWF IFS: prévisions disponibles jusqu'à H+{max_timestep} par pas de 3h")
+            elif model == "gfs_seamless":
+                max_timestep = 120  # GFS propose généralement jusqu'à 120 heures (5 jours) pour les données complètes
+                timestep = st.slider("Heure de prévision", 0, max_timestep, 0, 
+                                            help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
+                st.info(f"GFS: prévisions disponibles jusqu'à H+{max_timestep}")
+            else:  # Valeur par défaut pour tout autre modèle
+                max_timestep = 72
+                timestep = st.slider("Heure de prévision", 0, max_timestep, 0, 
+                                            help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
+                st.info(f"Modèle: prévisions disponibles jusqu'à H+{max_timestep}")
+            
+            # Convertir le timestep en jours et heures pour l'affichage
+            days = timestep // 24
+            hours = timestep % 24
+            if timestep > 0:
+                forecast_text = f"Prévision pour H+{hours}" if days == 0 else f"Prévision pour J+{days}, {hours}h"
+                st.success(forecast_text)
+                sidebar_analyze_clicked = st.button("Analyser l'émagramme", key="sidebar_analyser_emagramme")
+                if days > 0:
+                    forecast_text = f"Prévision pour J+{days}, {hours}h"
+                else:
+                    forecast_text = f"Prévision pour H+{hours}"
         else:
             evolution_hours = 24
             evolution_step = 3
-        
-        # Ajouter la configuration FFVL
-        st.subheader("Paramètres FFVL")
-        ffvl_api_key = st.text_input("Clé API FFVL", 
-                                value=st.session_state.get("ffvl_api_key", ""),
-                                type="password",
-                                help="Clé API FFVL pour la recherche de sites. Contactez informatique@ffvl.fr pour l'obtenir.")
-        
-        # Sauvegarder la clé API dans session_state
-        if ffvl_api_key:
-            st.session_state.ffvl_api_key = ffvl_api_key
         
         st.subheader("Type de surface")
         surface_type = st.selectbox(
@@ -1486,54 +1529,6 @@ def main():
                 delta_t = st.slider("Delta T de déclenchement (°C)", 
                                 min_value=1.0, max_value=6.0, value=3.0, step=0.5, key="slider_delta_t",
                                 help="Différence de température requise pour déclencher un thermique")
-
-    # Section pour le pas de temps de prévision (nouveau)
-    st.sidebar.header("Temps de prévision")
-    
-    # Déterminer la plage de temps disponible selon le modèle
-    if model == "meteofrance_arome_france_hd":
-        max_timestep = 36
-        timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
-                                    help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
-        st.sidebar.info(f"AROME: prévisions disponibles jusqu'à H+{max_timestep}")
-    elif model == "meteofrance_arpege_europe" or model == "meteofrance_arpege_world":
-        max_timestep = 96
-        timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
-                                    help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
-        st.sidebar.info(f"ARPÈGE: prévisions disponibles jusqu'à H+{max_timestep}")
-    elif model == "ecmwf_ifs025":
-        max_timestep = 120  # 15 jours x 8 pas par jour = 120 pas (à 3h d'intervalle)
-        
-        # Avertir que les données sont à résolution 3-horaire
-        st.sidebar.warning("⚠️ Le modèle ECMWF IFS fournit des données à résolution 3-horaire, " +
-                        "ce qui peut limiter la précision de l'analyse d'évolution.")
-        
-        timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, step=3,  # Pas de 3h
-                                help=f"0 = analyse actuelle, les prévisions sont disponibles par pas de 3h")
-        
-        st.sidebar.info(f"ECMWF IFS: prévisions disponibles jusqu'à H+{max_timestep} par pas de 3h")
-    elif model == "gfs_seamless":
-        max_timestep = 120  # GFS propose généralement jusqu'à 120 heures (5 jours) pour les données complètes
-        timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
-                                    help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
-        st.sidebar.info(f"GFS: prévisions disponibles jusqu'à H+{max_timestep}")
-    else:  # Valeur par défaut pour tout autre modèle
-        max_timestep = 72
-        timestep = st.sidebar.slider("Heure de prévision", 0, max_timestep, 0, 
-                                    help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
-        st.sidebar.info(f"Modèle: prévisions disponibles jusqu'à H+{max_timestep}")
-    
-    # Convertir le timestep en jours et heures pour l'affichage
-    days = timestep // 24
-    hours = timestep % 24
-    if timestep > 0:
-        forecast_text = f"Prévision pour H+{hours}" if days == 0 else f"Prévision pour J+{days}, {hours}h"
-        st.sidebar.success(forecast_text)
-        sidebar_analyze_clicked = st.sidebar.button("Analyser l'émagramme", key="sidebar_analyser_emagramme")
-        if days > 0:
-            forecast_text = f"Prévision pour J+{days}, {hours}h"
-        else:
-            forecast_text = f"Prévision pour H+{hours}"
     
     # Section pour les sites prédéfinis
     st.sidebar.header("Sites prédéfinis")
@@ -1778,7 +1773,7 @@ def main():
                     # Vérifier si une erreur est signalée
                     if "error" in evolution_data:
                         st.error(evolution_data["message"])
-                        st.error("Veuillez essayer un autre modèle météo ou réduire la période de prévision.")
+                        st.error("Veuillez essayer d'augmenter ou réduire la période de prévision dans la sidebar : 'Paramètres'-'Heure de prévision'.")
                         # Ne pas continuer avec l'analyse d'évolution
                     else:
                         # Poursuivre avec votre code existant pour créer les graphiques
