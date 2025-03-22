@@ -213,41 +213,75 @@ def display_recommended_ffvl_sites(sites, wind_direction, wind_speed, thermal_ce
                 }
                 st.rerun()
 
-def search_ffvl_sites(lat, lon, radius=20, api_key="VOTRE_CLE_API"):
+def is_paragliding_takeoff(terrain):
+    """Détermine si un terrain est un décollage de parapente"""
+    # Vérifier les différents champs où l'info peut se trouver
+    possible_usages = terrain.get("possible_usages_text", "")
+    functions = terrain.get("flying_functions_text", "")
+    description = terrain.get("description", "")
+    terrain_type = terrain.get("type", "")  # Ajouter ce champ pour vérifier le type
+    
+    # S'assurer que chaque champ est une chaîne, même si la valeur est None
+    possible_usages = str(possible_usages).lower() if possible_usages is not None else ""
+    functions = str(functions).lower() if functions is not None else ""
+    description = str(description).lower() if description is not None else ""
+    terrain_type = str(terrain_type) if terrain_type is not None else ""
+    
+    # D'abord vérifier si c'est un site de parapente
+    is_paragliding = False
+    
+    # Si aucun de ces champs ne contient "parapente", ce n'est pas un site de parapente
+    if any("parapente" in field for field in [possible_usages, functions, description]):
+        is_paragliding = True
+    
+    # Si le site est explicitement marqué pour le delta mais pas le parapente, l'exclure
+    if ("delta" in possible_usages and "parapente" not in possible_usages) or \
+       ("delta" in functions and "parapente" not in functions):
+        is_paragliding = False
+    
+    # Maintenant vérifier si c'est un décollage (t=1)
+    is_takeoff = False
+    
+    # Vérifier si le type indique un décollage (t=1)
+    if terrain_type == "1" or terrain_type == 1:
+        is_takeoff = True
+    
+    # Chercher des mots-clés de décollage dans les descriptions
+    takeoff_keywords = ["décollage", "decollage", "déco", "deco"]
+    if any(keyword in description.lower() for keyword in takeoff_keywords):
+        is_takeoff = True
+        
+    # Si c'est un atterrissage, l'exclure même s'il contient un mot-clé de décollage
+    landing_keywords = ["atterrissage", "atterro"]
+    if any(keyword in description.lower() for keyword in landing_keywords) and not is_takeoff:
+        return False
+    
+    # Si le site est marqué comme un atterrissage (t=2), l'exclure
+    if terrain_type == "2" or terrain_type == 2:
+        return False
+    
+    # Retourner True uniquement si c'est à la fois un site de parapente ET un décollage
+    return is_paragliding and is_takeoff
+
+def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a644dd7"):
     """
     Recherche les sites de vol à proximité d'une position donnée
     en utilisant l'API FFVL.
-    
-    Args:
-        lat: Latitude du point central
-        lon: Longitude du point central
-        radius: Rayon de recherche en km
-        api_key: Clé API FFVL
-        
-    Returns:
-        Liste des sites trouvés
     """
     try:
         # URL de l'API FFVL pour les terrains
         url = f"https://data.ffvl.fr/api?base=terrains&mode=json&key={api_key}"
         
-        # Afficher l'URL pour le débogage
         logger.info(f"Requête FFVL: {url}")
         
         response = requests.get(url, timeout=10)
         
-        # Vérifier le statut et le contenu de la réponse
         logger.info(f"Statut: {response.status_code}, Content-Type: {response.headers.get('Content-Type')}")
-        
-        # Afficher les 100 premiers caractères pour le débogage
-        content_preview = response.text[:100].replace('\n', ' ')
-        logger.info(f"Aperçu du contenu: {content_preview}...")
         
         if response.status_code != 200:
             st.error(f"Erreur API FFVL: {response.status_code}")
             return []
         
-        # Vérifier si la réponse est vide
         if not response.text.strip():
             st.warning("L'API FFVL a renvoyé une réponse vide")
             return []
@@ -256,35 +290,44 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="VOTRE_CLE_API"):
             data = response.json()
         except json.JSONDecodeError as e:
             st.error(f"Erreur de décodage JSON: {str(e)}")
-            st.code(response.text[:500], language="json")  # Afficher le début de la réponse
             return []
         
-        # Vérifier si la structure est correcte
-        if not isinstance(data, dict) or "terrains" not in data:
-            st.warning(f"Structure de données inattendue: {type(data)}")
-            if isinstance(data, dict):
-                st.json(data)  # Afficher le JSON reçu
+        # Adapter le traitement en fonction du format réel de la réponse
+        terrains = data if isinstance(data, list) else data.get("terrains", [])
+        
+        #st.info(f"Nombre total de terrains reçus: {len(terrains)}")
+        
+        # Si les terrains sont vides, afficher un message et retourner
+        if not terrains:
+            st.warning("Aucun terrain trouvé dans la réponse de l'API")
             return []
         
-        # Filtrer les sites en fonction de leur distance par rapport au point central
-        # (approximation à vol d'oiseau)
+        # Afficher un exemple de terrain pour comprendre sa structure (sans utiliser d'expander)
+        #if len(terrains) > 0:
+            #st.info("Exemple des champs disponibles dans un terrain:" + 
+                   #", ".join(list(terrains[0].keys())[:10]) + "...")
+        
+        # Filtrer les sites en fonction de leur distance et de leur usage pour le vol
         sites = []
-        for terrain in data.get("terrains", []):
-            # Vérifier que les coordonnées sont valides
+        sites_count = 0
+        takeoff_sites_count = 0
+        
+        for terrain in terrains:
+            # Vérifier que les coordonnées sont présentes
             if not terrain.get("latitude") or not terrain.get("longitude"):
                 continue
                 
-            site_lat = float(terrain["latitude"])
-            site_lon = float(terrain["longitude"])
+            try:
+                site_lat = float(terrain["latitude"])
+                site_lon = float(terrain["longitude"])
+            except (ValueError, TypeError):
+                continue
             
-            # Calcul de distance approximatif (Haversine)
+            # Calcul de distance (Haversine)
             from math import radians, cos, sin, asin, sqrt
             
             def haversine(lat1, lon1, lat2, lon2):
-                # Convertir en radians
                 lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
-                
-                # Formule haversine
                 dlon = lon2 - lon1 
                 dlat = lat2 - lat1 
                 a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
@@ -295,31 +338,40 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="VOTRE_CLE_API"):
             distance = haversine(lat, lon, site_lat, site_lon)
             
             if distance <= radius:
-                # Récupérer les informations pertinentes
-                site_info = {
-                    "name": terrain.get("nom", "Site sans nom"),
-                    "type": terrain.get("type", "Type non spécifié"),
-                    "latitude": site_lat,
-                    "longitude": site_lon,
-                    "distance": round(distance, 1),
-                    "altitude": terrain.get("altitude_deco", ""),
-                    "orientation": terrain.get("orientations", ""),
-                    "status": terrain.get("statut", ""),
-                    "difficulty": terrain.get("difficulte", ""),
-                    "ffvl_id": terrain.get("id", ""),
-                    "icon_url": f"https://data.ffvl.fr/api/?base=terrains&mode=icon&tid={terrain.get('id', '')}"
-                }
+                sites_count += 1
                 
-                # Ne garder que les sites de parapente/delta
-                if "parapente" in site_info["type"].lower() or "delta" in site_info["type"].lower():
+                # Utiliser la nouvelle fonction pour vérifier si c'est un décollage de parapente
+                if is_paragliding_takeoff(terrain):
+                    takeoff_sites_count += 1
+                    
+                    # Récupérer les informations pertinentes
+                    site_info = {
+                        "name": terrain.get("toponym", "Site sans nom"),
+                        "type": "Décollage parapente",  # Spécifier explicitement que c'est un décollage
+                        "latitude": site_lat,
+                        "longitude": site_lon,
+                        "distance": round(distance, 1),
+                        "altitude": terrain.get("altitude", ""),
+                        "orientation": terrain.get("wind_orientations_ok", ""),
+                        "status": terrain.get("status", ""),
+                        "difficulty": terrain.get("terrain_experience_conseillee", ""),
+                        "ffvl_id": terrain.get("suid", ""),
+                        "description": terrain.get("description", "") or "",
+                        "icon_url": f"https://data.ffvl.fr/api/?base=terrains&mode=icon&tid={terrain.get('suid', '')}"
+                    }
+                    
                     sites.append(site_info)
         
         # Trier par distance
         sites.sort(key=lambda x: x["distance"])
         
+        #st.info(f"Sites dans le rayon de {radius}km: {sites_count}")
+        #st.info(f"Décollages de parapente identifiés: {takeoff_sites_count}")
+        
         return sites
     except Exception as e:
-        logger.error(f"Erreur lors de la recherche des sites FFVL: {e}")
+        logger.error(f"Erreur lors de la recherche des sites FFVL: {e}", exc_info=True)
+        st.error(f"Erreur: {str(e)}")
         return []
          
 # Fonction pour afficher l'émagramme dans Streamlit
@@ -1552,6 +1604,16 @@ def main():
         }
         st.session_state.run_analysis = True
     
+    def set_ffvl_site_and_analyze(site_data):
+        """Fonction de callback pour définir un site FFVL et déclencher l'analyse"""
+        st.session_state.site_selection = {
+            "latitude": site_data["latitude"],
+            "longitude": site_data["longitude"],
+            "altitude": site_data["altitude"],
+            "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
+        }
+        st.session_state.run_analysis = True
+
     # Organiser les sites par région
     regions = {}
     for site in PRESET_SITES:
@@ -1636,9 +1698,8 @@ def main():
                     col1, col2, col3 = st.columns([2, 1, 1])
                     with col1:
                         st.markdown(f"**{site.get('name', 'Site sans nom')}**")
-                        # Vérifier l'existence des clés avant d'y accéder
-                        if 'type' in site and site['type']:
-                            st.markdown(f"Type: {site['type']}")
+                        site_type = "parapente" if "parapente" in site.get('type', '').lower() else site.get('type', '')
+                        st.markdown(f"Type: {site_type}")
                         if 'orientation' in site and site['orientation']:
                             st.markdown(f"Orientation: {site['orientation']}")
                         if 'difficulty' in site and site['difficulty']:
@@ -1649,37 +1710,20 @@ def main():
                             st.markdown(f"Distance: {site['distance']} km")
                         if 'altitude' in site and site['altitude']:
                             st.markdown(f"Altitude: {site['altitude']} m")
-                        
+                            
                     with col3:
-                        if st.button(f"🪂", key=f"site_ffvl_{i}"):
-                            try:
-                                # Déboguer les valeurs
-                                st.write(f"Debug - latitude: {site.get('latitude')}, longitude: {site.get('longitude')}")
-                                
-                                # S'assurer que les coordonnées sont des nombres
-                                lat = float(site.get("latitude", 0))
-                                lon = float(site.get("longitude", 0))
-                                alt_str = site.get("altitude", "")
-                                
-                                # Convertir l'altitude en nombre si possible
-                                try:
-                                    alt = float(alt_str) if alt_str else st.session_state.site_selection["altitude"]
-                                except (ValueError, TypeError):
-                                    alt = st.session_state.site_selection["altitude"]
-                                
-                                # Vérifier que les coordonnées sont valides
-                                if -90 <= lat <= 90 and -180 <= lon <= 180:
-                                    st.session_state.site_selection = {
-                                        "latitude": lat,
-                                        "longitude": lon,
-                                        "altitude": alt,
-                                        "model": st.session_state.site_selection["model"]
-                                    }
-                                    st.experimental_rerun()
-                                else:
-                                    st.error(f"Coordonnées hors limites: lat={lat}, lon={lon}")
-                            except Exception as e:
-                                st.error(f"Erreur lors de l'utilisation du site: {str(e)}")
+                        # Préparer les données du site pour le callback
+                        site_data = {
+                            "latitude": float(site.get("latitude", 0)),
+                            "longitude": float(site.get("longitude", 0)), 
+                            "altitude": float(site.get("altitude", 0)) if site.get("altitude") else 0,
+                            "name": site.get("name", "Site sans nom")
+                        }
+                        
+                        # Utiliser la même approche que pour les sites prédéfinis
+                        st.button(f"🪂 Utiliser", key=f"site_ffvl_{i}", 
+                                on_click=set_ffvl_site_and_analyze, 
+                                args=(site_data,))
             else:
                 st.warning("Aucun site de vol trouvé à proximité")
                 st.info("Essayez d'augmenter le rayon de recherche ou de vérifier votre position")
@@ -1688,11 +1732,23 @@ def main():
     main_analyze_clicked = st.button("Analyser l'émagramme")
     
     # Maintenant on peut utiliser analyze_clicked
-    should_run_analysis = main_analyze_clicked or sidebar_analyze_clicked or st.session_state.run_analysis
+    should_run_analysis = main_analyze_clicked or sidebar_analyze_clicked or st.session_state.get('run_analysis', False)
 
     if should_run_analysis:
         # Réinitialiser le flag pour éviter des analyses en boucle
         st.session_state.run_analysis = False
+
+        # S'assurer que toutes les valeurs nécessaires sont présentes
+        if latitude is None or longitude is None or site_altitude is None:
+            st.error("Les coordonnées ou l'altitude sont manquantes. Veuillez les saisir.")
+        else:
+            # Mettre à jour la session avec les valeurs actuelles
+            st.session_state.site_selection = {
+                "latitude": latitude,
+                "longitude": longitude,
+                "altitude": site_altitude,
+                "model": model
+            }
         
         if use_openmeteo and not api_key:
             # Déterminer la source de données
@@ -2193,7 +2249,7 @@ def main():
                                 ffvl_lat, 
                                 ffvl_lon, 
                                 radius=search_radius, 
-                                api_key=st.session_state.get("ffvl_api_key", "DEMO_KEY")
+                                api_key=st.session_state.get("ffvl_api_key", "79254946b01975fec7933ffc2a644dd7")
                             )
                             
                             if sites:
@@ -2653,7 +2709,7 @@ def main():
                             """)
                         
                         import numpy as np
-                        
+
                         # Prédiction de la durée de vol
                         flight_prediction = predict_flight_duration(
                             analysis.thermal_ceiling,
