@@ -263,6 +263,16 @@ def is_paragliding_takeoff(terrain):
     # Retourner True uniquement si c'est à la fois un site de parapente ET un décollage
     return is_paragliding and is_takeoff
 
+def set_ffvl_site_and_analyze(site_data):
+    """Fonction de callback pour définir un site FFVL et déclencher l'analyse"""
+    st.session_state.site_selection = {
+        "latitude": site_data["latitude"],
+        "longitude": site_data["longitude"],
+        "altitude": site_data["altitude"],
+        "model": st.session_state.site_selection.get("model", "meteofrance_arome_france_hd")
+    }
+    st.session_state.run_analysis = True
+
 def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a644dd7"):
     """
     Recherche les sites de vol à proximité d'une position donnée
@@ -295,7 +305,7 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a64
         # Adapter le traitement en fonction du format réel de la réponse
         terrains = data if isinstance(data, list) else data.get("terrains", [])
         
-        #st.info(f"Nombre total de terrains reçus: {len(terrains)}")
+        st.info(f"Nombre total de terrains reçus: {len(terrains)}")
         
         # Si les terrains sont vides, afficher un message et retourner
         if not terrains:
@@ -303,9 +313,9 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a64
             return []
         
         # Afficher un exemple de terrain pour comprendre sa structure (sans utiliser d'expander)
-        #if len(terrains) > 0:
-            #st.info("Exemple des champs disponibles dans un terrain:" + 
-                   #", ".join(list(terrains[0].keys())[:10]) + "...")
+        if len(terrains) > 0:
+            st.info("Exemple des champs disponibles dans un terrain:" + 
+                   ", ".join(list(terrains[0].keys())[:10]) + "...")
         
         # Filtrer les sites en fonction de leur distance et de leur usage pour le vol
         sites = []
@@ -365,10 +375,115 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a64
         # Trier par distance
         sites.sort(key=lambda x: x["distance"])
         
-        #st.info(f"Sites dans le rayon de {radius}km: {sites_count}")
-        #st.info(f"Décollages de parapente identifiés: {takeoff_sites_count}")
+        st.info(f"Sites dans le rayon de {radius}km: {sites_count}")
+        st.info(f"Décollages de parapente identifiés: {takeoff_sites_count}")
         
-        return sites
+        # Affichage sur la carte et tableau
+        if sites:
+            st.success(f"{len(sites)} décollages trouvés à proximité")
+            
+            # Créer une carte centrée sur la position recherchée
+            import folium
+            from streamlit_folium import folium_static
+            
+            m = folium.Map(location=[lat, lon], zoom_start=10)
+            
+            # Ajouter un marqueur pour la position de référence
+            folium.Marker(
+                [lat, lon],
+                popup="Position de référence",
+                icon=folium.Icon(color="red", icon="info-sign")
+            ).add_to(m)
+            
+            # Ajouter un marqueur pour chaque site trouvé
+            for i, site in enumerate(sites):
+                # Déterminer la couleur du marqueur en fonction de la difficulté
+                icon_color = "green"  # Par défaut
+                
+                difficulty = site.get("difficulty", "")
+                if difficulty is not None:  # Vérifier si la difficulté n'est pas None
+                    difficulty_lower = str(difficulty).lower()
+                    if "difficile" in difficulty_lower:
+                        icon_color = "red"
+                    elif "confirmé" in difficulty_lower or "confirme" in difficulty_lower:
+                        icon_color = "orange"
+                
+                # Préparer les informations pour le popup avec sécurité contre les None
+                site_name = site.get("name", "Site sans nom")
+                site_type = site.get("type", "Type non spécifié")
+                
+                # Altitude avec sécurité
+                altitude_display = "Altitude non spécifiée"
+                if site.get("altitude"):
+                    altitude_display = f"{site['altitude']}m"
+                
+                # Construction du popup HTML avec des vérifications pour chaque valeur
+                popup_html = f"""
+                <b>{site_name}</b><br>
+                Type: {site_type}<br>
+                Altitude: {altitude_display}<br>
+                Distance: {site['distance']} km<br>
+                """
+                
+                # Orientation avec sécurité
+                orientation = site.get("orientation")
+                if orientation:
+                    popup_html += f"Orientation: {orientation}<br>"
+                
+                # Difficulté avec sécurité
+                if difficulty:
+                    popup_html += f"Difficulté: {difficulty}"
+                
+                # Créer le marqueur avec le popup
+                folium.Marker(
+                    [site["latitude"], site["longitude"]],
+                    popup=folium.Popup(popup_html, max_width=300),
+                    tooltip=site_name,
+                    icon=folium.Icon(color=icon_color, icon="flag")
+                ).add_to(m)
+            
+            # Afficher la carte
+            st.subheader("Carte des sites de décollage")
+            folium_static(m)
+            
+            # Afficher les sites dans un tableau pour sélection
+            st.subheader("Sélectionner un site pour l'analyse")
+            
+            # Utiliser 3 colonnes pour l'affichage compact
+            cols = st.columns(3)
+            for i, site in enumerate(sites):
+                col = cols[i % 3]
+                with col:
+                    # Sécuriser toutes les valeurs
+                    site_name = site.get("name", "Site sans nom")
+                    
+                    altitude_display = ""
+                    if site.get("altitude"):
+                        altitude_display = f"{site['altitude']}m"
+                    else:
+                        altitude_display = "Alt. N/A"
+                    
+                    st.markdown(f"**{site_name}**")
+                    st.markdown(f"{altitude_display} | {site['distance']}km")
+                    
+                    # Préparer les données du site pour le callback
+                    site_data = {
+                        "latitude": float(site.get("latitude", 0)),
+                        "longitude": float(site.get("longitude", 0)), 
+                        "altitude": float(site.get("altitude", 0)) if site.get("altitude") else 0,
+                        "name": site_name
+                    }
+                    
+                    # Utiliser on_click avec la fonction callback
+                    st.button(f"🪂 Utiliser", key=f"site_ffvl_{i}", 
+                             on_click=set_ffvl_site_and_analyze, 
+                             args=(site_data,))
+            
+            return sites
+        else:
+            st.warning("Aucun site de vol trouvé à proximité")
+            st.info("Essayez d'augmenter le rayon de recherche ou de vérifier votre position")
+            return []
     except Exception as e:
         logger.error(f"Erreur lors de la recherche des sites FFVL: {e}", exc_info=True)
         st.error(f"Erreur: {str(e)}")
@@ -1693,25 +1808,65 @@ def main():
             if sites:
                 st.success(f"{len(sites)} sites trouvés à proximité")
                 
-                # Afficher les sites dans un tableau
-                for i, site in enumerate(sites[:10]):
-                    col1, col2, col3 = st.columns([2, 1, 1])
-                    with col1:
-                        st.markdown(f"**{site.get('name', 'Site sans nom')}**")
-                        site_type = "parapente" if "parapente" in site.get('type', '').lower() else site.get('type', '')
-                        st.markdown(f"Type: {site_type}")
-                        if 'orientation' in site and site['orientation']:
-                            st.markdown(f"Orientation: {site['orientation']}")
-                        if 'difficulty' in site and site['difficulty']:
-                            st.markdown(f"Difficulté: {site['difficulty']}")
+                # Créer une carte centrée sur la position recherchée
+                import folium
+                from streamlit_folium import folium_static
+                
+                m = folium.Map(location=[lat, lon], zoom_start=10)
+                
+                # Ajouter un marqueur pour la position de référence
+                folium.Marker(
+                    [lat, lon],
+                    popup="Position de référence",
+                    icon=folium.Icon(color="red", icon="info-sign")
+                ).add_to(m)
+                
+                # Ajouter un marqueur pour chaque site trouvé
+                for i, site in enumerate(sites):
+                    # Déterminer la couleur du marqueur en fonction de la difficulté
+                    icon_color = "green"  # Par défaut
+                    if "difficile" in site.get("difficulty", "").lower():
+                        icon_color = "red"
+                    elif "confirmé" in site.get("difficulty", "").lower() or "confirme" in site.get("difficulty", "").lower():
+                        icon_color = "orange"
                     
-                    with col2:
-                        if 'distance' in site:
-                            st.markdown(f"Distance: {site['distance']} km")
-                        if 'altitude' in site and site['altitude']:
-                            st.markdown(f"Altitude: {site['altitude']} m")
-                            
-                    with col3:
+                    # Créer un popup HTML avec les informations du site
+                    popup_html = f"""
+                    <b>{site['name']}</b><br>
+                    Type: {site['type']}<br>
+                    Altitude: {site['altitude']}m<br>
+                    Distance: {site['distance']} km<br>
+                    """
+                    
+                    if 'orientation' in site and site['orientation']:
+                        popup_html += f"Orientation: {site['orientation']}<br>"
+                    
+                    if 'difficulty' in site and site['difficulty']:
+                        popup_html += f"Difficulté: {site['difficulty']}"
+                    
+                    # Créer le marqueur avec le popup
+                    folium.Marker(
+                        [site["latitude"], site["longitude"]],
+                        popup=folium.Popup(popup_html, max_width=300),
+                        tooltip=site['name'],
+                        icon=folium.Icon(color=icon_color, icon="flag")
+                    ).add_to(m)
+                
+                # Afficher la carte
+                st.subheader("Carte des sites de décollage")
+                folium_static(m)
+                
+                # Créer un tableau des sites avec boutons pour sélection
+                st.subheader("Sélectionner un site pour l'analyse")
+                
+                # Afficher les sites dans un tableau
+                cols = st.columns(3)
+                for i, site in enumerate(sites):
+                    col = cols[i % 3]
+                    with col:
+                        st.markdown(f"**{site.get('name', 'Site sans nom')}**")
+                        st.markdown(f"Alt: {site['altitude']}m | Dist: {site['distance']}km")
+                        
                         # Préparer les données du site pour le callback
                         site_data = {
                             "latitude": float(site.get("latitude", 0)),
@@ -2280,11 +2435,13 @@ def main():
                                     
                                     # Ajouter les sites
                                     for site in sites:
-                                        icon_color = "green"
-                                        if "difficile" in site.get("difficulty", "").lower():
-                                            icon_color = "red"
-                                        elif "confirmé" in site.get("difficulty", "").lower():
-                                            icon_color = "orange"
+                                        difficulty = site.get("difficulty", "")
+                                        if difficulty is not None:  # Vérifier explicitement si la valeur n'est pas None
+                                            difficulty = difficulty.lower()  # Puis convertir en minuscules
+                                            if "difficile" in difficulty:
+                                                icon_color = "red"
+                                            elif "confirmé" in difficulty or "confirme" in difficulty:
+                                                icon_color = "orange"
                                         
                                         folium.Marker(
                                             [site["latitude"], site["longitude"]],
