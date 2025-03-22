@@ -30,3 +30,4 @@ plotly
 folium 
 streamlit-folium
 streamlit-geolocation
+streamlit-calendar

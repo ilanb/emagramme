@@ -15,7 +15,9 @@ from datetime import datetime, timedelta
 from retry_requests import retry
 import json
 from streamlit_geolocation import streamlit_geolocation
+import datetime
 import time
+from streamlit_calendar import calendar
 
 # Importer les classes et fonctions du fichier principal
 from emagramme_analyzer import (
@@ -103,6 +105,9 @@ from enhanced_emagramme_analysis import (
     recommend_best_takeoff_sites,
     predict_flight_duration
 )
+
+if 'previous_model' not in st.session_state:
+    st.session_state.previous_model = None
 
 # Fonction de géolocalisation automatique
 def get_user_location():
@@ -500,8 +505,6 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a64
                     # Afficher le nom du site avec l'indicateur de niveau
                     st.markdown(f"{difficulty_emoji} **{site_name}**")
                     st.markdown(f"{altitude_display} | {site['distance']}km | {difficulty}")
-                    
-                   
                     
                     # Préparer les données du site pour le callback
                     site_data = {
@@ -1583,22 +1586,9 @@ def main():
             )
             model = model_options[model_index]
             
-            # Informations supplémentaires selon le modèle sélectionné
-            if model == "meteofrance_arome_france_hd":
-                st.info("AROME HD: Haute résolution (~2km) sur la France, précis pour les reliefs")
-            elif model == "meteofrance_arpege_europe":
-                st.info("ARPEGE Europe: Résolution moyenne (~11km), bonne couverture européenne")
-            elif model == "meteofrance_arpege_world":
-                st.info("ARPEGE Mondial: Résolution plus grossière (~40km), disponible partout dans le monde")
-            elif model == "ecmwf_ifs025":
-                st.info("""
-                    **Note sur ECMWF IFS**: Ce modèle fournit des données à résolution 3-horaire (toutes les 3 heures) 
-                    et non horaire comme les autres modèles. L'évolution des conditions peut donc paraître moins 
-                    détaillée. Pour une analyse à court terme plus précise, privilégiez AROME HD.
-                    """)
-            elif model == "gfs_seamless":
-                st.info("GFS: Modèle américain, disponible mondialement, résolution ~25km")
-            
+            model_changed = st.session_state.previous_model != model
+            st.session_state.previous_model = model  # Mettre à jour le modèle précédent
+
             # Pas besoin de clé API pour Open-Meteo
             api_key = None
         
@@ -1645,51 +1635,8 @@ def main():
             evolution_step = st.slider("Pas de temps (heures)", 
                                         min_value=1, max_value=6, value=3, step=1,
                                         help="Intervalle entre chaque point d'analyse")
-            # Section pour le pas de temps de prévision (nouveau)
-            # Déterminer la plage de temps disponible selon le modèle
-            if model == "meteofrance_arome_france_hd":
-                max_timestep = 36
-                timestep = st.slider("Heure de prévision", 0, max_timestep, 0, 
-                                            help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
-                st.info(f"AROME: prévisions disponibles jusqu'à H+{max_timestep}")
-            elif model == "meteofrance_arpege_europe" or model == "meteofrance_arpege_world":
-                max_timestep = 96
-                timestep = st.slider("Heure de prévision", 0, max_timestep, 0, 
-                                            help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
-                st.info(f"ARPÈGE: prévisions disponibles jusqu'à H+{max_timestep}")
-            elif model == "ecmwf_ifs025":
-                max_timestep = 120  # 15 jours x 8 pas par jour = 120 pas (à 3h d'intervalle)
+
                 
-                # Avertir que les données sont à résolution 3-horaire
-                st.warning("⚠️ Le modèle ECMWF IFS fournit des données à résolution 3-horaire, " +
-                                "ce qui peut limiter la précision de l'analyse d'évolution.")
-                
-                timestep = st.slider("Heure de prévision", 0, max_timestep, 0, step=3,  # Pas de 3h
-                                        help=f"0 = analyse actuelle, les prévisions sont disponibles par pas de 3h")
-                
-                st.info(f"ECMWF IFS: prévisions disponibles jusqu'à H+{max_timestep} par pas de 3h")
-            elif model == "gfs_seamless":
-                max_timestep = 120  # GFS propose généralement jusqu'à 120 heures (5 jours) pour les données complètes
-                timestep = st.slider("Heure de prévision", 0, max_timestep, 0, 
-                                            help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
-                st.info(f"GFS: prévisions disponibles jusqu'à H+{max_timestep}")
-            else:  # Valeur par défaut pour tout autre modèle
-                max_timestep = 72
-                timestep = st.slider("Heure de prévision", 0, max_timestep, 0, 
-                                            help=f"0 = analyse actuelle, 1-{max_timestep} = prévision en heures")
-                st.info(f"Modèle: prévisions disponibles jusqu'à H+{max_timestep}")
-            
-            # Convertir le timestep en jours et heures pour l'affichage
-            days = timestep // 24
-            hours = timestep % 24
-            if timestep > 0:
-                forecast_text = f"Prévision pour H+{hours}" if days == 0 else f"Prévision pour J+{days}, {hours}h"
-                st.success(forecast_text)
-                sidebar_analyze_clicked = st.button("Analyser l'émagramme", key="sidebar_analyser_emagramme")
-                if days > 0:
-                    forecast_text = f"Prévision pour J+{days}, {hours}h"
-                else:
-                    forecast_text = f"Prévision pour H+{hours}"
         else:
             evolution_hours = 24
             evolution_step = 3
@@ -1792,7 +1739,179 @@ def main():
                 cols[i % 2].button(site["name"], key=f"site_{region}_{i}", 
                                  on_click=set_site_and_analyze, 
                                  args=(site,))
-    
+
+    # Section pour le pas de temps de prévision (nouveau)
+    # Déterminer la plage de temps disponible selon le modèle
+    if model == "meteofrance_arome_france_hd":
+                max_timestep = 36
+                step_hours = 1
+                model_name = "AROME"
+                info_text = f"AROME: prévisions disponibles jusqu'à H+{max_timestep}"
+    elif model == "meteofrance_arpege_europe" or model == "meteofrance_arpege_world":
+                max_timestep = 96
+                step_hours = 1
+                model_name = "ARPÈGE"
+                info_text = f"ARPÈGE: prévisions disponibles jusqu'à H+{max_timestep}"
+    elif model == "ecmwf_ifs025":
+                max_timestep = 120
+                step_hours = 3  # Pas de 3h pour ECMWF
+                model_name = "ECMWF IFS"
+                info_text = f"ECMWF IFS: prévisions disponibles jusqu'à H+{max_timestep} par pas de 3h"
+                st.warning("⚠️ Le modèle ECMWF IFS fournit des données à résolution 3-horaire")
+    elif model == "gfs_seamless":
+                max_timestep = 120
+                step_hours = 1
+                model_name = "GFS"
+                info_text = f"GFS: prévisions disponibles jusqu'à H+{max_timestep}"
+    else:
+                max_timestep = 72
+                step_hours = 1
+                model_name = "Modèle"
+                info_text = f"Modèle: prévisions disponibles jusqu'à H+{max_timestep}"
+
+            # 5. Forcer la réinitialisation du calendrier si le modèle a changé
+    if model_changed:
+                # Réinitialiser le timestep quand le modèle change
+                timestep = 0
+                
+                # Supprimer l'état du calendrier des sessions précédentes
+                if "main_window_calendar" in st.session_state:
+                    del st.session_state.main_window_calendar
+
+                # Effacer toutes les clés de session liées au calendrier
+                calendar_keys = [key for key in st.session_state.keys() if "calendar" in key]
+                for key in calendar_keys:
+                    del st.session_state[key]
+                
+                # Optionnel: réinitialiser aussi l'événement sélectionné
+                if "selected_forecast_event" in st.session_state:
+                    del st.session_state.selected_forecast_event
+
+            # 6. Le reste du code du calendrier reste le même
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    end_date = now + timedelta(hours=max_timestep)
+
+    st.header(f"📅 Sélection de l'heure de prévision - {model_name}")
+    st.write(info_text)
+
+            # Configurations du calendrier
+    calendar_options = {
+                "headerToolbar": {
+                    "left": "today prev,next",
+                    "center": "title",
+                    "right": "timeGridDay,timeGridWeek"
+                },
+                "initialView": "timeGridWeek",  # Changer de "timeGridDay" à "timeGridWeek"
+                "initialDate": now.strftime("%Y-%m-%d"),
+                "slotMinTime": "00:00:00",
+                "slotMaxTime": "24:00:00",
+                "slotDuration": f"01:00:00",
+                "expandRows": True,
+                "height": "600px",
+                "selectable": True,
+                "editable": False,
+                "navLinks": True
+            }
+
+            # Créer une liste d'événements pour les heures disponibles du modèle actuel
+    calendar_events = []
+
+            # Générer un événement pour chaque pas de temps disponible
+    for hour in range(0, max_timestep + 1, step_hours):
+                forecast_time = now + timedelta(hours=hour)
+                
+                # Formater l'heure pour l'affichage
+                if hour == 0:
+                    title = "Analyse actuelle"
+                else:
+                    # Pour les modèles à pas variable, spécifier le pas de temps dans le titre
+                    if step_hours > 1:
+                        days = hour // 24
+                        hours_of_day = hour % 24
+                        if days > 0:
+                            title = f"J+{days}, {hours_of_day}h"
+                        else:
+                            title = f"H+{hour}"
+                    else:
+                        title = f"H+{hour}"
+                
+                # Créer l'événement
+                event = {
+                    "id": str(hour),
+                    "title": title,
+                    "start": forecast_time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "end": (forecast_time + timedelta(hours=step_hours)).strftime("%Y-%m-%dT%H:%M:%S"),
+                    "resourceId": str(hour),  # Pour identifier facilement l'heure choisie
+                    "backgroundColor": "#4285F4" if hour == 0 else "#34A853"  # Couleur différente pour l'analyse actuelle
+                }
+                calendar_events.append(event)
+
+            # CSS personnalisé pour améliorer l'apparence du calendrier
+    custom_css = """
+                .fc-event-title {
+                    font-weight: bold;
+                }
+                .fc-event-past {
+                    opacity: 0.85;
+                }
+                .fc-toolbar-title {
+                    font-size: 1.5rem;
+                }
+                .fc-timegrid-event {
+                    cursor: pointer;
+                }
+                .fc-timegrid-event:hover {
+                    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+                }
+            """
+    calendar_key = f"calendar_{model.replace('-', '_')}_{int(time.time() / 100)}"
+
+            # Afficher le calendrier avec une clé unique
+    calendar_state = calendar(
+                events=calendar_events,
+                options=calendar_options,
+                custom_css=custom_css,
+                key=calendar_key  # Utiliser une clé dynamique au lieu d'une clé fixe
+            )
+
+            # 7. Stocker l'état du calendrier et l'événement sélectionné dans session_state
+    if calendar_state and "eventClick" in calendar_state:
+                st.session_state.selected_forecast_event = calendar_state["eventClick"]
+                selected_event = calendar_state["eventClick"]
+    elif "selected_forecast_event" in st.session_state:
+                # Récupérer l'événement sélectionné précédemment (sauf si le modèle a changé)
+                selected_event = st.session_state.selected_forecast_event
+    else:
+                selected_event = None
+
+            # 8. Le reste du code reste le même
+    if selected_event:
+                # Extraire l'ID de l'événement (qui correspond au pas de temps)
+                timestep = int(selected_event["event"]["id"])
+                
+                # Vérifier si le timestep est valide pour le modèle actuel
+                if timestep > max_timestep:
+                    timestep = 0
+                    st.warning(f"L'heure précédemment sélectionnée n'est pas disponible avec ce modèle. Veuillez sélectionner une nouvelle heure.")
+                    selected_event = None
+                    if "selected_forecast_event" in st.session_state:
+                        del st.session_state.selected_forecast_event
+                else:
+                    # Afficher la confirmation avec design amélioré
+                    st.success(f"✅ Prévision sélectionnée: {selected_event['event']['title']}")
+                    
+                    # Calculer le format lisible (jours/heures)
+                    days = timestep // 24
+                    hours = timestep % 24
+                    
+                    if timestep > 0:
+                        forecast_text = f"Prévision pour H+{hours}" if days == 0 else f"Prévision pour J+{days}, {hours}h"
+                        st.info(forecast_text)
+    else:
+                # Message plus clair quand aucune sélection n'est faite
+                timestep = 0
+                st.info("👆 Veuillez cliquer sur une heure dans le calendrier pour sélectionner une prévision")
     # Section des paramètres de localisation
     st.subheader("Localisation")
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -1821,7 +1940,6 @@ def main():
                                 step=10.0,  # Changé de int à float
                                 format="%.1f")  # Format avec un chiffre après la virgule
                                       
-    
     # Section pour la recherche de décollages proches
     with st.expander("🪂 Recherche de décollages proches FFVL", expanded=False):
         search_radius = st.slider(
@@ -1841,6 +1959,7 @@ def main():
                     radius=search_radius,
                     api_key=st.session_state.get("ffvl_api_key", "79254946b01975fec7933ffc2a644dd7")
                 )    
+
 
     # Bouton pour lancer l'analyse (IMPORTANT: définir 'analyze_clicked' AVANT de l'utiliser)
     main_analyze_clicked = st.button("Analyser l'émagramme")
