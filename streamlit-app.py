@@ -397,16 +397,23 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a64
             
             # Ajouter un marqueur pour chaque site trouvé
             for i, site in enumerate(sites):
-                # Déterminer la couleur du marqueur en fonction de la difficulté
-                icon_color = "green"  # Par défaut
-                
+                # Déterminer la couleur du marqueur en fonction de la difficulté IPPI
+                icon_color = "green"  # Vert = Niveau 3 (débutant) par défaut
+
                 difficulty = site.get("difficulty", "")
                 if difficulty is not None:  # Vérifier si la difficulté n'est pas None
                     difficulty_lower = str(difficulty).lower()
-                    if "difficile" in difficulty_lower:
-                        icon_color = "red"
-                    elif "confirmé" in difficulty_lower or "confirme" in difficulty_lower:
-                        icon_color = "orange"
+                    # Extraire les numéros IPPI éventuels (3, 4, 5)
+                    if "ippi 5" in difficulty_lower or "ippi5" in difficulty_lower or "niveau 5" in difficulty_lower or "niveau5" in difficulty_lower or "confirmé" in difficulty_lower:
+                        icon_color = "darkred"  # Marron/Rouge foncé = Niveau 5 (confirmé)
+                    elif "ippi 4" in difficulty_lower or "ippi4" in difficulty_lower or "niveau 4" in difficulty_lower or "niveau4" in difficulty_lower or "pilote" in difficulty_lower:
+                        icon_color = "blue"     # Bleu = Niveau 4 (pilote)
+                    
+                    # Détections supplémentaires par mots-clés
+                    if "difficile" in difficulty_lower or "confirmé" in difficulty_lower or "confirme" in difficulty_lower:
+                        icon_color = "darkred"  # Rouge foncé/Marron = Difficile/Confirmé
+                    elif "moyen" in difficulty_lower:
+                        icon_color = "blue"     # Bleu = Moyen
                 
                 # Préparer les informations pour le popup avec sécurité contre les None
                 site_name = site.get("name", "Site sans nom")
@@ -419,20 +426,14 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a64
                 
                 # Construction du popup HTML avec des vérifications pour chaque valeur
                 popup_html = f"""
-                <b>{site_name}</b><br>
-                Type: {site_type}<br>
-                Altitude: {altitude_display}<br>
-                Distance: {site['distance']} km<br>
+                <div style="min-width: 200px;">
+                    <h4 style="margin-bottom: 5px;">{site['name']}</h4>
+                    <b>Type:</b> {site['type']}<br>
+                    <b>Altitude:</b> {site['altitude']}m<br>
+                    <b>Orientation:</b> {site['orientation']}<br>
+                    <b>Difficulté:</b> <span style="color: {icon_color}; font-weight: bold;">{site['difficulty']}</span>
+                </div>
                 """
-                
-                # Orientation avec sécurité
-                orientation = site.get("orientation")
-                if orientation:
-                    popup_html += f"Orientation: {orientation}<br>"
-                
-                # Difficulté avec sécurité
-                if difficulty:
-                    popup_html += f"Difficulté: {difficulty}"
                 
                 # Créer le marqueur avec le popup
                 folium.Marker(
@@ -444,6 +445,15 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a64
             
             # Afficher la carte
             st.subheader("Carte des sites de décollage")
+
+            # Légende pour les couleurs des sites
+            st.markdown("""
+            **Légende des niveaux de difficulté :**
+            - 🟢 **Vert** : Niveau facile / Brevet Pilote Initial (IPPI 3)
+            - 🔵 **Bleu** : Niveau intermédiaire / Brevet Pilote (IPPI 4)
+            - 🟤 **Rouge/Marron** : Niveau confirmé / Brevet Pilote Confirmé (IPPI 5)
+            """)
+
             folium_static(m, width=1300, height=600)
             
             # Afficher les sites dans un tableau pour sélection
@@ -462,9 +472,36 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a64
                         altitude_display = f"{site['altitude']}m"
                     else:
                         altitude_display = "Alt. N/A"
+
+                    # Déterminer la couleur pour l'affichage dans la liste
+                    difficulty = site.get("difficulty", "")
+                    difficulty_emoji = "🟢"  # Emoji vert par défaut
+                    icon_color = "green"     # Couleur verte par défaut
+
+                    # Appliquer la même logique de coloration que pour les marqueurs
+                    if difficulty is not None:  # Vérifier si la difficulté n'est pas None
+                        difficulty_lower = str(difficulty).lower()
+                        # Extraire les numéros IPPI éventuels (3, 4, 5)
+                        if "ippi 5" in difficulty_lower or "ippi5" in difficulty_lower or "niveau 5" in difficulty_lower or "niveau5" in difficulty_lower or "confirmé" in difficulty_lower:
+                            icon_color = "darkred"  # Marron/Rouge foncé = Niveau 5 (confirmé)
+                            difficulty_emoji = "🟤"  # Emoji marron
+                        elif "ippi 4" in difficulty_lower or "ippi4" in difficulty_lower or "niveau 4" in difficulty_lower or "niveau4" in difficulty_lower or "pilote" in difficulty_lower:
+                            icon_color = "blue"     # Bleu = Niveau 4 (pilote)
+                            difficulty_emoji = "🔵"  # Emoji bleu
+                        
+                        # Détections supplémentaires par mots-clés
+                        if "difficile" in difficulty_lower or "confirmé" in difficulty_lower or "confirme" in difficulty_lower:
+                            icon_color = "darkred"  # Rouge foncé/Marron = Difficile/Confirmé
+                            difficulty_emoji = "🟤"  # Emoji marron
+                        elif "moyen" in difficulty_lower:
+                            icon_color = "blue"     # Bleu = Moyen
+                            difficulty_emoji = "🔵"  # Emoji bleu
+
+                    # Afficher le nom du site avec l'indicateur de niveau
+                    st.markdown(f"{difficulty_emoji} **{site_name}**")
+                    st.markdown(f"{altitude_display} | {site['distance']}km | {difficulty}")
                     
-                    st.markdown(f"**{site_name}**")
-                    st.markdown(f"{altitude_display} | {site['distance']}km")
+                   
                     
                     # Préparer les données du site pour le callback
                     site_data = {
@@ -2328,84 +2365,6 @@ def main():
                                 radius=search_radius, 
                                 api_key=st.session_state.get("ffvl_api_key", "79254946b01975fec7933ffc2a644dd7")
                             )
-                            
-                            if sites:
-                                st.success(f"{len(sites)} sites trouvés")
-                                
-                                # Choisir le mode d'affichage
-                                if display_mode == "Standard":
-                                    # Utiliser la fonction d'affichage existante
-                                    # Créer un DataFrame pour affichage
-                                    sites_df = pd.DataFrame(sites)
-                                    sites_display = sites_df[["name", "type", "distance", "altitude", "orientation", "difficulty"]].copy()
-                                    sites_display.columns = ["Nom", "Type", "Distance (km)", "Altitude (m)", "Orientation", "Difficulté"]
-                                    
-                                    st.dataframe(sites_display)
-                                    
-                                    # Afficher une carte avec les sites
-                                    import folium
-                                    from streamlit_folium import folium_static
-                                    
-                                    m = folium.Map(location=[ffvl_lat, ffvl_lon], zoom_start=10)
-                                    
-                                    # Ajouter le point central
-                                    folium.Marker(
-                                        [ffvl_lat, ffvl_lon],
-                                        popup="Position de référence",
-                                        icon=folium.Icon(color="red", icon="info-sign")
-                                    ).add_to(m)
-                                    
-                                    # Ajouter les sites
-                                    for site in sites:
-                                        difficulty = site.get("difficulty", "")
-                                        if difficulty is not None:  # Vérifier explicitement si la valeur n'est pas None
-                                            difficulty = difficulty.lower()  # Puis convertir en minuscules
-                                            if "difficile" in difficulty:
-                                                icon_color = "red"
-                                            elif "confirmé" in difficulty or "confirme" in difficulty:
-                                                icon_color = "orange"
-                                        
-                                        folium.Marker(
-                                            [site["latitude"], site["longitude"]],
-                                            popup=f"<b>{site['name']}</b><br>Type: {site['type']}<br>Altitude: {site['altitude']}m<br>Orientation: {site['orientation']}<br>Difficulté: {site['difficulty']}",
-                                            icon=folium.Icon(color=icon_color, icon="flag")
-                                        ).add_to(m)
-                                    
-                                    # Afficher la carte
-                                    folium_static(m)
-                                    
-                                    # Bouton pour sélectionner un site
-                                    selected_site = st.selectbox("Sélectionner un site pour l'analyse", 
-                                                            options=range(len(sites)),
-                                                            format_func=lambda i: f"{sites[i]['name']} ({sites[i]['distance']} km)")
-                                    
-                                    if st.button("Utiliser ce site"):
-                                        site = sites[selected_site]
-                                        st.session_state.site_selection = {
-                                            "latitude": site["latitude"],
-                                            "longitude": site["longitude"],
-                                            "altitude": float(site["altitude"]) if site["altitude"] else st.session_state.site_selection["altitude"],
-                                            "model": st.session_state.site_selection["model"]
-                                        }
-                                        st.rerun()
-                                else:
-                                    # Récupérer les données météo nécessaires pour les recommandations
-                                    # Soit depuis l'analyse si elle existe, soit des valeurs par défaut
-                                    if 'analysis' in locals() and analysis:
-                                        wind_dir = float(analysis.wind_directions[0]) if hasattr(analysis, 'wind_directions') and analysis.wind_directions else 0
-                                        wind_spd = float(analysis.wind_speeds[0]) if hasattr(analysis, 'wind_speeds') and analysis.wind_speeds else 10
-                                        thermal_ceil = float(analysis.thermal_ceiling)
-                                    else:
-                                        # Valeurs par défaut
-                                        wind_dir = 0
-                                        wind_spd = 10
-                                        thermal_ceil = 2000
-                                    
-                                    # Utiliser la nouvelle fonction d'affichage avec recommandations
-                                    display_recommended_ffvl_sites(sites, wind_dir, wind_spd, thermal_ceil)
-                            else:
-                                st.warning("Aucun site trouvé dans ce rayon")
-                                st.info("Essayez d'augmenter le rayon de recherche ou de vérifier votre position")
 
                 with tab4:
                     st.header("Guide de la météorologie aérologique")
