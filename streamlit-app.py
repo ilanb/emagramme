@@ -1594,6 +1594,19 @@ def main():
         
         # Ajouter la configuration FFVL
         st.subheader("Paramètres FFVL")
+        # CSS pour masquer le bouton d'affichage du mot de passe
+        hide_password_eye_css = """
+        <style>
+        div[data-testid="stTextInput"] button {
+            display: none;
+        }
+        </style>
+        """
+
+        # Injecter le CSS dans l'application
+        st.markdown(hide_password_eye_css, unsafe_allow_html=True)
+
+        # Ensuite, utilisez votre text_input comme avant :
         ffvl_api_key = st.text_input("Clé API FFVL", 
                                     value=st.session_state.get("ffvl_api_key", "79254946b01975fec7933ffc2a644dd7"),
                                     type="password",
