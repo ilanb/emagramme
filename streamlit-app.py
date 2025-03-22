@@ -305,7 +305,7 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a64
         # Adapter le traitement en fonction du format réel de la réponse
         terrains = data if isinstance(data, list) else data.get("terrains", [])
         
-        st.info(f"Nombre total de terrains reçus: {len(terrains)}")
+        #st.info(f"Nombre total de terrains reçus: {len(terrains)}")
         
         # Si les terrains sont vides, afficher un message et retourner
         if not terrains:
@@ -313,9 +313,9 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a64
             return []
         
         # Afficher un exemple de terrain pour comprendre sa structure (sans utiliser d'expander)
-        if len(terrains) > 0:
-            st.info("Exemple des champs disponibles dans un terrain:" + 
-                   ", ".join(list(terrains[0].keys())[:10]) + "...")
+        #if len(terrains) > 0:
+            #st.info("Exemple des champs disponibles dans un terrain:" + 
+                   #", ".join(list(terrains[0].keys())[:10]) + "...")
         
         # Filtrer les sites en fonction de leur distance et de leur usage pour le vol
         sites = []
@@ -375,8 +375,8 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a64
         # Trier par distance
         sites.sort(key=lambda x: x["distance"])
         
-        st.info(f"Sites dans le rayon de {radius}km: {sites_count}")
-        st.info(f"Décollages de parapente identifiés: {takeoff_sites_count}")
+        #st.info(f"Sites dans le rayon de {radius}km: {sites_count}")
+        #st.info(f"Décollages de parapente identifiés: {takeoff_sites_count}")
         
         # Affichage sur la carte et tableau
         if sites:
@@ -386,7 +386,7 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a64
             import folium
             from streamlit_folium import folium_static
             
-            m = folium.Map(location=[lat, lon], zoom_start=10)
+            m = folium.Map(location=[lat, lon], zoom_start=13)
             
             # Ajouter un marqueur pour la position de référence
             folium.Marker(
@@ -444,7 +444,7 @@ def search_ffvl_sites(lat, lon, radius=20, api_key="79254946b01975fec7933ffc2a64
             
             # Afficher la carte
             st.subheader("Carte des sites de décollage")
-            folium_static(m)
+            folium_static(m, width=1300, height=600)
             
             # Afficher les sites dans un tableau pour sélection
             st.subheader("Sélectionner un site pour l'analyse")
