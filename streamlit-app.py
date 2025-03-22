@@ -1453,7 +1453,7 @@ def main():
         # Ajouter la configuration FFVL
         st.subheader("Paramètres FFVL")
         ffvl_api_key = st.text_input("Clé API FFVL", 
-                                    value=st.session_state.get("ffvl_api_key", ""),
+                                    value=st.session_state.get("ffvl_api_key", "79254946b01975fec7933ffc2a644dd7"),
                                     type="password",
                                     help="Clé API FFVL pour la recherche de sites. Contactez informatique@ffvl.fr pour l'obtenir.")
             
@@ -1687,7 +1687,7 @@ def main():
                     latitude, 
                     longitude, 
                     radius=search_radius,
-                    api_key=st.session_state.get("ffvl_api_key", "DEMO_KEY")
+                    api_key=st.session_state.get("ffvl_api_key", "79254946b01975fec7933ffc2a644dd7")
                 )
             
             if sites:
