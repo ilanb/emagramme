@@ -1602,7 +1602,6 @@ def main():
         }
         </style>
         """
-
         # Injecter le CSS dans l'application
         st.markdown(hide_password_eye_css, unsafe_allow_html=True)
 
